@@ -1,0 +1,6 @@
+---
+SERIAL: 2015110200
+foo:
+  pass: bar
+  A: 192.168.0.1
+  AAAA: ff80::1

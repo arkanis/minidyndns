@@ -1,0 +1,21 @@
+domain: dyn.example.com
+ttl: 15
+
+dns:
+  port: 10053
+  ip: 127.0.54.17
+http:
+  port: 10080
+  ip: 127.0.54.17
+
+user: nobody
+group: nogroup
+
+soa:
+  nameserver: ns.example.com
+  mail: dns.admin@example.com
+  ttl: 86400
+  refresh_time: 86400
+  retry_time: 7200
+  expire_time: 3600000
+  negative_caching_ttl: 172800
