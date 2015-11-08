@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.0.0
+MiniDynDNS v1.0.1
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -22,6 +22,11 @@ global variables.
 
 Execute tests/test.rb to put the DNS server through the paces. Run it as root
 (e.g. via sudo) to test privilege dropping.
+
+# Version history
+
+1.0.0 2015-11-06  Initial release.
+1.0.1 2015-11-08  Removed a left over debug output line.
 
 =end
 
@@ -91,7 +96,6 @@ def merge_db
 		$db.delete name
 	end
 	
-	puts edited_db.inspect
 	edited_db.each do |name, edited_data|
 		next if name == "SERIAL"
 		$db[name]["pass"] = edited_data["pass"]
