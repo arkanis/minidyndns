@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.0.1
+MiniDynDNS v1.0.2
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -27,6 +27,9 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
 
 1.0.0 2015-11-06  Initial release.
 1.0.1 2015-11-08  Removed a left over debug output line.
+1.0.2 2015-11-19  Trying to update records without a password now returns 403
+                  forbidden. They're unchangable.
+                  Errors during HTTP or DNS requests are now logged to stderr.
 
 =end
 
