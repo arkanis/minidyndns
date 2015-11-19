@@ -68,7 +68,7 @@ test "SOA record for nameserver itself",
 	"SOA", "dyn.example.com",
 	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110209 86400 7200 3600000 172800"
 
-
+# Changing IPs
 test "A record before change",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.2"
@@ -104,7 +104,19 @@ test "Unchanged serial",
 	"SOA", "dyn.example.com",
 	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110211 86400 7200 3600000 172800"
 
+test "A record before attempting impossible change",
+	"A", "unchangable.dyn.example.com",
+	"unchangable.dyn.example.com. 15	IN	A	192.168.0.3"
+http_update_ip "192.168.0.30", "unchangable", ""
+test "A record after attempting impossible change",
+	"A", "unchangable.dyn.example.com",
+	"unchangable.dyn.example.com. 15	IN	A	192.168.0.3"
+http_update_ip "192.168.0.30", "unchangable", "wrong-pw"
+test "A record after attempting impossible change",
+	"A", "unchangable.dyn.example.com",
+	"unchangable.dyn.example.com. 15	IN	A	192.168.0.3"
 
+# Merging the DB from file
 FileUtils.remove "db.yml"
 FileUtils.copy_file "db.02.yml", "db.yml"
 Process.kill "USR1", server

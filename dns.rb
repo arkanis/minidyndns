@@ -415,8 +415,12 @@ def handle_http_connection(connection)
 	# Process request
 	ip_as_string = nil
 	status = catch :status do
+		# Mare sure we got auth information
+		throw :status, :not_authorized unless user and $db[user]
+		# Tell the client if the name can't be changed
+		throw :status, :unchangable if $db[user]["pass"].to_s.strip == ""
 		# Make sure we're authenticated
-		throw :status, :not_authorized unless user and $db[user] and password == $db[user]["pass"]
+		throw :status, :not_authorized unless password == $db[user]["pass"]
 		# Make sure we got the necessary params
 		throw :status, :bad_request unless params["myip"]
 		
@@ -460,6 +464,14 @@ def handle_http_connection(connection)
 			"Content-Type: text/plain",
 			"",
 			"You need to specify a new IP in the myip URL parameter"
+		].join("\r\n")
+	when :unchangable
+		log "HTTP: #{method} #{path_and_querystring} -> denied, #{user} unchangable"
+		connection.write [
+			"HTTP/1.0 403 Forbidden",
+			"Content-Type: text/plain",
+			"",
+			"This IP address can't be changed, sorry."
 		].join("\r\n")
 	else
 		log "HTTP: #{method} #{path_and_querystring} -> not authorized"
