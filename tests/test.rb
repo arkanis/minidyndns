@@ -29,7 +29,7 @@ end
 
 def http_update_ip(ip, user, password)
 	open "http://127.0.54.17:10080/?myip=#{ip}", http_basic_authentication: [user, password]
-rescue OpenURI::HTTPError
+rescue OpenURI::HTTPError, EOFError
 end
 
 
@@ -39,7 +39,7 @@ end
 
 FileUtils.cd File.dirname(__FILE__)
 FileUtils.copy_file "db.01.yml", "db.yml"
-server = spawn "ruby1.9.1 ../dns.rb", out: "/dev/null", err: "/dev/null"
+server = spawn "ruby1.9.1 ../dns.rb", out: "/dev/null"
 at_exit do
 	Process.kill "INT", server
 	Process.wait server

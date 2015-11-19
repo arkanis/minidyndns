@@ -50,6 +50,11 @@ def log(message)
 	return true
 end
 
+def error(message)
+	$stderr.puts Time.now.strftime("%Y-%m-%d %H:%M:%S") + " " + message
+	return true
+end
+
 # Outputs to STDERR and exits. This way admins can redirect all errors
 # into a different file if they want.
 def die(message)
@@ -251,9 +256,9 @@ def parse_dns_question(packet)
 	
 	return id, question_name, question_type, recursion_desired
 rescue StandardError => e
-	log "DNS: Failed to parse request: #{e}"
+	error "DNS: Failed to parse request: #{e}"
 	e.backtrace.each do |stackframe|
-		puts "\t#{stackframe}"
+		$stderr.puts "\t#{stackframe}"
 	end
 end
 
@@ -484,9 +489,9 @@ def handle_http_connection(connection)
 		].join("\r\n")
 	end
 rescue StandardError => e
-	log "HTTP: Failed to process request: #{e}"
+	error "HTTP: Failed to process request: #{e}"
 	e.backtrace.each do |stackframe|
-		puts "\t#{stackframe}"
+		$stderr.puts "\t#{stackframe}"
 	end
 end
 
