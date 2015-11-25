@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.0.2
+MiniDynDNS v1.0.3
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -30,6 +30,8 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
 1.0.2 2015-11-19  Trying to update records without a password now returns 403
                   forbidden. They're unchangable.
                   Errors during HTTP or DNS requests are now logged to stderr.
+1.0.3 2015-11-25  An empty answer is now returned if we can't find the requested record but the name has other records
+                  (RFC 4074 4.2. Return "Name Error").
 
 =end
 
@@ -186,8 +188,8 @@ def handle_dns_packet(packet)
 	end
 	
 	if records.empty?
-		log "DNS: #{type_as_string} #{name} -> not found"
-		return build_dns_answer id, recursion_desired, RCODE_NAME_ERROR, domain, type
+		log "DNS: #{type_as_string} #{name} -> no records returned"
+		return build_dns_answer id, recursion_desired, RCODE_NO_ERROR, domain, type
 	else
 		log "DNS: #{type_as_string} #{name} -> #{texts.join(", ")}"
 		return build_dns_answer id, recursion_desired, RCODE_NO_ERROR, domain, type, *records

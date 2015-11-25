@@ -1,3 +1,15 @@
+=begin
+
+This test script starts the DNS server on unpriviliged ports and reproduces some manual tests done during development.
+
+It uses the `dig` command line utility to do the DNS queries and just checks if the output contains the expected lines.
+So make sure you have `dig` installed if you want to test the server.
+
+The script starts the server by executing the `ruby` command with the DNS server as script. So it'll use the default
+ruby version of your system. You can change that in the code if you want.
+
+=end
+
 require "fileutils"
 require "open-uri"
 
@@ -39,7 +51,7 @@ end
 
 FileUtils.cd File.dirname(__FILE__)
 FileUtils.copy_file "db.01.yml", "db.yml"
-server = spawn "ruby1.9.1 ../dns.rb", out: "/dev/null"
+server = spawn "ruby ../dns.rb", out: "/dev/null"
 at_exit do
 	Process.kill "INT", server
 	Process.wait server
@@ -63,6 +75,16 @@ test "ignoring questions for different domains",
 	"A", "other-domain.example.com",
 	"no servers could be reached"
 
+# Return empty answers if we didn't found the matching record for a name but the name has other records
+test "empty answer for no IPv6 address",
+	"AAAA", "ipv4-only.dyn.example.com",
+	"status: NOERROR",
+	"ANSWER: 0"
+test "empty answer for no IPv4 address",
+	"A", "ipv6-only.dyn.example.com",
+	"status: NOERROR",
+	"ANSWER: 0"
+
 # SOA for server
 test "SOA record for nameserver itself",
 	"SOA", "dyn.example.com",
@@ -82,7 +104,8 @@ test "Updated serial of SOA record",
 
 test "AAAA record before adding it",
 	"AAAA", "bar.dyn.example.com",
-	"status: NXDOMAIN"
+	"status: NOERROR",
+	"ANSWER: 0"
 http_update_ip "ff80::2", "bar", "pw2"
 test "AAAA record after adding it",
 	"AAAA", "bar.dyn.example.com",
