@@ -66,7 +66,7 @@ YAML database file:
 
 	sudo pkill -USR1 -o -f dns.rb
 
-Suthdown the server by sending it the INT signal (like pressing `ctrl+c`):
+Shutdown the server by sending it the INT signal (like pressing `ctrl+c`):
 
 	sudo pkill -INT -o -f dns.rb
 
