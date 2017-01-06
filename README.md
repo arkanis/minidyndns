@@ -1,6 +1,6 @@
 # MiniDynDNS
 
-A simple no fuss DNS server with an build in HTTP interface to update IPs. It's build to be compact and simple way to access your home devices via subdomains. Something like DynDNS but just for your private needs. It's _not_ build for performance!
+A simple no fuss DNS server with an build in HTTP/HTTPS interface to update IPs. It's build to be compact and simple way to access your home devices via subdomains. Something like DynDNS but just for your private needs. It's _not_ build for performance!
 
 - Supports IPv4 and IPv6 (A and AAAA records)
 - IPs are saved to and loaded from a YAML database file
@@ -30,7 +30,7 @@ A simple no fuss DNS server with an build in HTTP interface to update IPs. It's 
 Right now I just leave it running within a `screen` terminal. But feel free to automatically start it on server boot up. If you want you can also redirect `stdout` into an access log file and `stderr` into an error log file.
 
 
-## HTTP interface to update IPs
+## HTTP/HTTPS interface to update IPs
 
 The HTTP interface is very minimalistic: The server only understands one HTTP request to update or invalidate IP addresses. This _isn't_ a webinterface you can use in your browser! Rather it's the interface your router can use to automatically report a changed IP to the DNS server (look for something like DynDNS in your router configuration). The HTTP interface is inspired by DynDNS and others so routers can easily be configured to report to this DNS server.
 
@@ -54,12 +54,19 @@ When you change an IP in `db.yml` the server will ignore it. It is designed to r
 
 ## Some useful commands
 
-All these commands assume that the DNS server is running on 127.0.0.2 with default ports (53 for DNS, 80 for HTTP).
+All these commands assume that the DNS server is running on 127.0.0.2 with default ports (53 for DNS, 80 for HTTP, 443 for HTTPS).
 
 Update a name with a new IPv4 or IPv6 address:
 
 	wget --user foo --password bar -O /dev/null http://127.0.0.2/?myip=192.168.0.1
 	wget --user foo --password bar -O /dev/null http://127.0.0.2/?myip=ff80::1
+
+Same with `curl` and over HTTPS:
+
+	curl -u foo:bar --cacert server_cert.pem https://127.0.0.2/?myip=192.168.0.2
+	curl -u foo:bar --cacert server_cert.pem https://127.0.0.2/?myip=ff80::1
+
+Note: Don't use the self-signed certificate of your CA with `--cacert`. For some reason this causes OpenSSL to freak out and block the entire HTTP/HTTPS interface. Please let me know if you know why.
 
 Send an USR1 signal to the server to make it pick up changes from the
 YAML database file:

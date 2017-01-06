@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.0.3
+MiniDynDNS v1.1.0
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -32,6 +32,10 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
                   Errors during HTTP or DNS requests are now logged to stderr.
 1.0.3 2015-11-25  An empty answer is now returned if we can't find the requested record but the name has other records
                   (RFC 4074 4.2. Return "Name Error").
+1.1.0 2017-01-06  Added HTTPS support.
+                  Fixed hanging HTTP connections of stupid routers breaking DNS
+                  the server (moved HTTP servers into extra thread and imposed
+                  timeout).
 
 =end
 
