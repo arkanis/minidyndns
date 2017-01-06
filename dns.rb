@@ -525,7 +525,7 @@ end.parse!
 $config = begin
 	YAML.load_file options[:config]
 rescue Errno::ENOENT
-	die "SERVER: Failed to load config file #{config_file}, sorry."
+	die "SERVER: Failed to load config file #{options[:config]}, sorry."
 end
 $config[:db] = options[:db]
 
