@@ -44,6 +44,11 @@ def http_update_ip(ip, user, password)
 rescue OpenURI::HTTPError, EOFError
 end
 
+def https_update_ip(ip, user, password)
+	open "https://127.0.54.17:10443/?myip=#{ip}",  ssl_verify_mode: 0, http_basic_authentication: [user, password]
+rescue OpenURI::HTTPError, EOFError
+end
+
 
 #
 # Startup DNS server with our test configuration, shut it down when done and clean up changed config.
@@ -138,6 +143,19 @@ http_update_ip "192.168.0.30", "unchangable", "wrong-pw"
 test "A record after attempting impossible change",
 	"A", "unchangable.dyn.example.com",
 	"unchangable.dyn.example.com. 15	IN	A	192.168.0.3"
+
+test "A record before change via HTTPS",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
+https_update_ip "192.168.0.33", "bar", "pw2"
+test "A record after change via HTTPS",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.33"
+https_update_ip "192.168.0.22", "bar", "pw2"
+test "A record after changing back via HTTPS",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
+
 
 # Merging the DB from file
 FileUtils.remove "db.yml"

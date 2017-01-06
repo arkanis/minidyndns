@@ -1,0 +1,28 @@
+# Design
+
+- Poll UDP socket and TCP server socket with IO.select
+- Handle UDP packets directly
+- Spawn new thread for each TCP connection (up to a specific limit?)
+- Inter-thread communication:
+	- Use global interpreter lock?
+	- Use mutex to proect the in-memory DB?
+	- Use UNIX domain socket to send update requests back to main thread?
+	=> Mutex would be simplest approach
+- How to integrate reload signal (USR1) into inter-thread communication?
+	- Possible to wait for it via IO.select?
+	- Use Process.block_signal at the time when we hold the mutex?
+	- Just set a flag variable and check it on every poll? No good since a long time can pass between polls...
+	- Just use a Pipe (same old trick...). Signal it in the signal handler and watch it with IO.select.
+	  https://www.sitepoint.com/the-self-pipe-trick-explained/
+
+
+# Links
+
+Trying to create a simple Ruby server over SSL
+	http://stackoverflow.com/questions/5872843/trying-to-create-a-simple-ruby-server-over-ssl
+	Describes how to build an HTTPS server.
+	It uses GServer which has be removed in Ruby 2.3 (because it's unmaintained).
+
+TCP server and UDP socket docs
+	http://ruby-doc.org/stdlib-2.3.1/libdoc/socket/rdoc/TCPServer.html
+	http://ruby-doc.org/stdlib-2.3.1/libdoc/socket/rdoc/UDPSocket.html

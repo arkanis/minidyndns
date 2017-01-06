@@ -7,6 +7,12 @@ dns:
 http:
   port: 10080
   ip: 127.0.54.17
+https:
+  port: 10443
+  ip: 127.0.54.17
+  cert: server_cert.pem
+  priv_key: server_priv_key.key
+http_timeout: 5.0
 
 user: nobody
 group: nogroup

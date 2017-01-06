@@ -16,6 +16,18 @@ dns:
 http:
   port: 80
   ip: 0.0.0.0
+https:
+  port: 443
+  ip: 0.0.0.0
+  cert: server_cert.pem
+  priv_key: server_priv_key.key
+# To disable HTTPS set it to false
+#https: false
+
+# Maximum number of seconds the server waits for clients to send
+# the entire HTTP request (to kill requests from stupid routers that
+# keep the connections open forever).
+http_timeout: 5.0
 
 # The server needs to be started as root to bind to privileged ports
 # (everything below 1024). In that case it will drop privileges after

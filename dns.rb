@@ -42,6 +42,8 @@ require "socket"
 require "cgi"
 require "base64"
 require "ipaddr"
+require "openssl"
+require "timeout"
 
 
 #
@@ -88,7 +90,7 @@ end
 
 # Updates the in-memory DB with new data from the DB file.
 # 
-# - Adds users and IPs that doesn't exist yet
+# - Adds users and IPs that don't exist yet
 # - Deletes users no longer in the DB file
 # - Loads passwords of all users from the DB file
 # - Bumps serial
@@ -401,25 +403,43 @@ end
 # Only reacts to the basic authentication header and myip query parameter.
 # Everything else is ignored right now (path, other parameters or headers).
 def handle_http_connection(connection)
-	# Ignore empty TCP connections from chrome
-	request_line = connection.gets("\n")
-	return unless request_line and request_line.length > 0
+	log_prefix = if connection.is_a? OpenSSL::SSL::SSLSocket then "HTTPS" else "HTTP" end
 	
-	# Extract path and URL parameters
-	method, path_and_querystring, _ = request_line.chomp.split(" ", 3)
-	path, query_string = path_and_querystring.split("?", 2)
-	params = query_string ? CGI::parse(query_string) : {}
-	
-	# Extract user and password from HTTP headers
-	user, password = nil, nil
-	until (line = connection.gets("\n").chomp) == ""
-		name, value = line.split(": ", 2)
-		if name.downcase == "authorization"
-			auth_method, rest = value.split(" ", 2)
-			if auth_method.downcase == "basic"
-				user, password = Base64.decode64(rest).split(":", 2)
+	# Read the entire request from the connection and fill the local variables.
+	# This must not take longer that the configured number of seconds or we'll kill the connection.
+	# The idea is to handle all connections in a single thread (to avoid DOS attacks) but prevent
+	# stupids router from keeping connections open for ever.
+	method, path_and_querystring, params, user, password = nil, nil, nil, nil, nil
+	begin
+		# I know timeout() is considered harmful but we rely on the global interpreter lock anyway to
+		# synchronize access to $db. So the server only works correctly with interpreters that have a
+		# global interpreter lock (e.g. MRI). Also this server isn't designed for high-load scenarios.
+		# Given that timeout() won't hurt us to much... I hope.
+		Timeout::timeout($config["http_timeout"]) do
+			# Ignore empty TCP connections from chrome
+			request_line = connection.gets("\n")
+			return unless request_line and request_line.length > 0
+			
+			# Extract path and URL parameters
+			method, path_and_querystring, _ = request_line.chomp.split(" ", 3)
+			path, query_string = path_and_querystring.split("?", 2)
+			params = query_string ? CGI::parse(query_string) : {}
+			
+			# Extract user and password from HTTP headers
+			user, password = nil, nil
+			until (line = connection.gets("\n").chomp) == ""
+				name, value = line.split(": ", 2)
+				if name.downcase == "authorization"
+					auth_method, rest = value.split(" ", 2)
+					if auth_method.downcase == "basic"
+						user, password = Base64.decode64(rest).split(":", 2)
+					end
+				end
 			end
 		end
+	rescue Timeout::Error
+		log "#{log_prefix}: Client took to long to send data, ignoring"
+		return
 	end
 	
 	# Process request
@@ -460,7 +480,7 @@ def handle_http_connection(connection)
 	
 	case status
 	when :ok
-		log "HTTP: #{method} #{path_and_querystring} -> updated #{user} to #{ip_as_string}"
+		log "#{log_prefix}: #{method} #{path_and_querystring} -> updated #{user} to #{ip_as_string}"
 		connection.write [
 			"HTTP/1.0 200 OK",
 			"Content-Type: text/plain",
@@ -468,7 +488,7 @@ def handle_http_connection(connection)
 			"Your IP has been updated"
 		].join("\r\n")
 	when :bad_request
-		log "HTTP: #{method} #{path_and_querystring} -> bad request for #{user}"
+		log "#{log_prefix}: #{method} #{path_and_querystring} -> bad request for #{user}"
 		connection.write [
 			"HTTP/1.0 400 Bad Request",
 			"Content-Type: text/plain",
@@ -476,7 +496,7 @@ def handle_http_connection(connection)
 			"You need to specify a new IP in the myip URL parameter"
 		].join("\r\n")
 	when :unchangable
-		log "HTTP: #{method} #{path_and_querystring} -> denied, #{user} unchangable"
+		log "#{log_prefix}: #{method} #{path_and_querystring} -> denied, #{user} unchangable"
 		connection.write [
 			"HTTP/1.0 403 Forbidden",
 			"Content-Type: text/plain",
@@ -484,7 +504,7 @@ def handle_http_connection(connection)
 			"This IP address can't be changed, sorry."
 		].join("\r\n")
 	else
-		log "HTTP: #{method} #{path_and_querystring} -> not authorized"
+		log "#{log_prefix}: #{method} #{path_and_querystring} -> not authorized"
 		connection.write [
 			"HTTP/1.0 401 Not Authorized",
 			'WWW-Authenticate: Basic realm="Your friendly DynDNS server"',
@@ -494,7 +514,7 @@ def handle_http_connection(connection)
 		].join("\r\n")
 	end
 rescue StandardError => e
-	error "HTTP: Failed to process request: #{e}"
+	error "#{log_prefix}: Failed to process request: #{e}"
 	e.backtrace.each do |stackframe|
 		$stderr.puts "\t#{stackframe}"
 	end
@@ -503,7 +523,7 @@ end
 
 
 #
-# Server startup, mainloop and shutdown
+# Server startup
 #
 
 # Parse command line arguments
@@ -537,6 +557,17 @@ http_server = TCPServer.new $config["http"]["ip"], $config["http"]["port"]
 udp_socket = UDPSocket.new
 udp_socket.bind $config["dns"]["ip"], $config["dns"]["port"]
 
+# Open HTTPS server if configured
+https_server = if $config["https"]
+	https_tcp_server = TCPServer.new $config["https"]["ip"], $config["https"]["port"]
+	ssl_context = OpenSSL::SSL::SSLContext.new
+	ssl_context.cert = OpenSSL::X509::Certificate.new File.open($config["https"]["cert"])
+	ssl_context.key = OpenSSL::PKey::RSA.new File.open($config["https"]["priv_key"])
+	OpenSSL::SSL::SSLServer.new https_tcp_server, ssl_context
+else
+	nil
+end
+
 # Drop privileges, based on http://timetobleed.com/5-things-you-dont-know-about-user-ids-that-will-destroy-you/
 running_as = nil
 if Process.uid == 0
@@ -559,32 +590,53 @@ Signal.trap "USR1" do
 	merge_db
 end
 
-# Mainloop monitoring for incoming UDP packets and TCP connections
-# Note that the server can't handle a DNS packet while it takes care
-# of an HTTP connection. So if we have a long running HTTP connection
-# this will block DNS replies (like someone typing HTTP in a terminal
-# via netcat). This is by design to keep the code simple.
-log "SERVER: Running DNS on #{$config["dns"]["ip"]}:#{$config["dns"]["port"]}, HTTP on #{$config["http"]["ip"]}:#{$config["http"]["port"]}#{running_as}"
-loop do
-	begin
-		ready_sockets, _, _ = IO.select [http_server, udp_socket]
-	rescue Interrupt
-		break
-	end
-	if ready_sockets.include? udp_socket
-		# UDP packet available, process it and send the answer (if there is one)
-		packet, (_, port, _, addr) = udp_socket.recvfrom 512
-		answer = handle_dns_packet packet
-		udp_socket.send answer, 0, addr, port if answer
-	elsif ready_sockets.include? http_server
-		# HTTP connection ready, accept, handle and close it
-		connection = http_server.accept
-		handle_http_connection connection
-		connection.close
+log "SERVER: Running DNS on #{$config["dns"]["ip"]}:#{$config["dns"]["port"]}" +
+	", HTTP on #{$config["http"]["ip"]}:#{$config["http"]["port"]}" +
+	if https_server then ", HTTPS on #{$config["https"]["ip"]}:#{$config["https"]["port"]}" else "" end +
+	"#{running_as}"
+
+
+#
+# Server mainloops (extra thread for HTTP and HTTPS servers, DNS in main thread)
+#
+
+# Handle HTTP/HTTPS connections in an extra thread so they don't block
+# handling of DNS requests. We rely on the global interpreter lock to synchronize
+# access to the $db variable.
+# All incoming connections are handled one after the other by that thread. This hopefully
+# makes us less susceptible to DOS attacks since attackers can only saturate that thread.
+# Anyway that server design usually is a bad idea but is adequat for low load and simple
+# (especially given OpenSSL integration).
+Thread.new do
+	loop do
+		# In case https_server is nil we need to remove it from the read array.
+		# Otherwise select doesn't seem to work.
+		ready_servers, _, _ = IO.select [http_server, https_server].compact
+		ready_servers.each do |server|
+			# HTTP/HTTPS connection ready, accept, handle and close it
+			connection = server.accept
+			handle_http_connection connection
+			connection.close
+		end
 	end
 end
 
+
+# Mainloop monitoring for incoming UDP packets. If the user presses ctrl+c we exit
+# the mainloop and shutdown the server. When the main thread exits this also kills the
+# HTTP thread above.
+loop do
+	begin
+		packet, (_, port, _, addr) = udp_socket.recvfrom 512
+		answer = handle_dns_packet packet
+		udp_socket.send answer, 0, addr, port if answer
+	rescue Interrupt
+		break
+	end
+end
+
+# Server cleanup and shutdown (we just kill of the HTTP thread by ending the main thread)
 log "SERVER: Saving DB and shutting down"
-save_db
 http_server.close
 udp_socket.close
+save_db

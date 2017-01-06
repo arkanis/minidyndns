@@ -1,0 +1,20 @@
+Based on this cheatsheet by Joshua Boverhof
+http://dst.lbl.gov/~boverhof/openssl_certs.html
+Changed the names of the files to better reflect what they are (at least for me).
+
+# Generate a CA
+
+openssl req -new -x509 -out ca_cert.pem -keyout ca_priv_key.pem
+	enter password and FQDN (e.g. "localhost", "127.0.0.2" or "127.0.54.17")
+echo 00 >> ca_serial.srl
+
+# Generate server certificate/key pair
+
+openssl genrsa -out server_priv_key.key 1024
+openssl req -new -key server_priv_key.key -out server.req
+	enter __SAME__ FQDN as above (e.g. "localhost", "127.0.0.2" or "127.0.54.17")
+openssl x509 -req -in server.req -CA ca_cert.pem -CAkey ca_priv_key.pem -CAserial ca_serial.srl -out server_cert.pem
+
+# Client HTTP request
+
+curl -u foo:bar --cacert ca_cert.pem --insecure https://127.0.0.2/?myip=192.168.0.10
