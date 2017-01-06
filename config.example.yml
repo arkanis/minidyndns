@@ -5,7 +5,7 @@ domain: dyn.example.com
 # in seconds an reply stays valid. The higher the value the longer clients
 # might take to figure out that an IP address has changed. Small values
 # will force a DNS request on every page access. This is ok for seldomly
-# used sites but a very bad idea for high trafic sites.
+# used sites but a very bad idea for high traffic sites.
 ttl: 15
 
 # IP and port the DNS server runs on
