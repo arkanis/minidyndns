@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.1.0
+MiniDynDNS v1.1.1
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -36,6 +36,7 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
                   Fixed hanging HTTP connections of stupid routers breaking DNS
                   the server (moved HTTP servers into extra thread and imposed
                   timeout).
+1.1.1 2017-02-12  The server can now resolve itself by using the name "@" (reported by Chris).
 
 =end
 
@@ -174,11 +175,14 @@ def handle_dns_packet(packet)
 		)
 	end
 	
-	# Don't respond if the domain isn't a subdomain of our domain
-	log "DNS: #{type_as_string} #{domain} -> wrong domain, ignoring" and return nil unless domain.end_with?("." + $config["domain"])
+	# Don't respond if the domain isn't a subdomain of our domain or our domain itself
+	log "DNS: #{type_as_string} #{domain} -> wrong domain, ignoring" and return nil unless domain.end_with?($config["domain"])
 	
-	# Reply with a name error if we don't know the subdomain
+	# Reply with a name error if we don't know the subdomain. If we have to resolve the server itself use the name "@" for the
+	# lookup. "@" is an alias for the zone origin in zone files so we use it here for the same purpose (a name refering to the
+	# server itself).
 	name = domain[0..-($config["domain"].bytesize + 2)]
+	name = "@" if name == ""
 	unless $db[name]
 		log "DNS: #{type_as_string} #{name} -> not found"
 		return build_dns_answer(id, recursion_desired, RCODE_NAME_ERROR, domain, type)

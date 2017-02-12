@@ -10,6 +10,10 @@ bar:
 unchangable:
   pass: 
   A: 192.168.0.3
+"@":
+  pass: pw3
+  A: 192.168.0.4
+  AAAA: ff80::4
 
 ipv4-only:
   pass: pw

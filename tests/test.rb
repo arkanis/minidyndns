@@ -156,6 +156,21 @@ test "A record after changing back via HTTPS",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
 
+# Resolve the server itself by using a "@" record (alias for the server itself)
+test "resolve A record of itself",
+	"A", "dyn.example.com",
+	"dyn.example.com.	15	IN	A	192.168.0.4"
+test "resolve AAAA record of itself",
+	"AAAA", "dyn.example.com",
+	"dyn.example.com.	15	IN	AAAA	ff80::4"
+
+# Change the IP of the server itself
+http_update_ip "192.168.0.40", "@", "pw3"
+test "resolve A record of itself after change via HTTP",
+	"A", "dyn.example.com",
+	"dyn.example.com.	15	IN	A	192.168.0.40"
+
+
 
 # Merging the DB from file
 FileUtils.remove "db.yml"
