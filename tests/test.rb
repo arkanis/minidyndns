@@ -171,6 +171,31 @@ test "resolve A record of itself after change via HTTP",
 	"dyn.example.com.	15	IN	A	192.168.0.40"
 
 
+# Test 0x20 encoding of names in the questions section. Thats basically clients using a random upper and lowercase
+# combination for the domain name. That makes forgeries more expensive. Reported by SebiTNT:
+# http://arkanis.de/weblog/2015-11-27-build-your-own-dyndns#comment-2017-03-30-00-02-11-sebitnt
+# RFC: https://tools.ietf.org/html/draft-vixie-dnsext-dns0x20-00
+test "0x20 encoding (random upper and lowercase combination) Foo.Dyn.Example.Com",
+	"A", "Foo.Dyn.Example.Com",
+	"foo.dyn.example.com.	15	IN	A	192.168.0.1"
+test "0x20 encoding (random upper and lowercase combination) fOo.dYn.eXample.Com",
+	"A", "fOo.dYn.eXample.Com",
+	"foo.dyn.example.com.	15	IN	A	192.168.0.1"
+test "0x20 encoding (random upper and lowercase combination) FOO.DYN.EXAMPLE.COM",
+	"A", "FOO.DYN.EXAMPLE.COM",
+	"foo.dyn.example.com.	15	IN	A	192.168.0.1"
+test "random case name as it is in database",
+	"A", "rAndOMEcaSe.dyn.example.com",
+	"randomecase.dyn.example.com. 15	IN	A	192.168.0.1"
+test "random case name in lowercase",
+	"A", "randomecase.dyn.example.com",
+	"randomecase.dyn.example.com. 15	IN	A	192.168.0.1"
+test "random case name in uppercase",
+	"A", "RANDOMECASE.dyn.example.com",
+	"randomecase.dyn.example.com. 15	IN	A	192.168.0.1"
+
+
+
 
 # Merging the DB from file
 FileUtils.remove "db.yml"
@@ -196,3 +221,7 @@ http_update_ip "ff80::3", "bar", "changed-pw"
 test "changed record after using new password",
 	"AAAA", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	AAAA	ff80::3"
+
+test "reload random case names (name isn't updated, just not deleted)",
+	"A", "randomecase.dyn.example.com",
+	"randomecase.dyn.example.com. 15	IN	A	192.168.0.1"

@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.1.1
+MiniDynDNS v1.1.2
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -37,6 +37,7 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
                   the server (moved HTTP servers into extra thread and imposed
                   timeout).
 1.1.1 2017-02-12  The server can now resolve itself by using the name "@" (reported by Chris).
+1.1.2 2017-03-31  Names are now matched case insensitive (reported by SebiTNT).
 
 =end
 
@@ -80,12 +81,16 @@ end
 
 # If loading the DB fails an empty DB with a new serial is generated.
 def load_db
-	$db = begin
+	raw_db = begin
 		YAML.load_file $config[:db]
 	rescue Errno::ENOENT
 		false
 	end
-	$db = {} unless $db.kind_of? Hash
+	raw_db = {} unless raw_db.kind_of? Hash
+	
+	# Convert all keys except "SERIAL" to lowercase since DNS names are case insensitive
+	$db = Hash[ raw_db.map{|key, value| [key != "SERIAL" ? key.downcase : key, value]} ]
+	
 	$db["SERIAL"] = Time.now.strftime("%Y%m%d00").to_i unless $db.include? "SERIAL"
 end
 
@@ -101,7 +106,9 @@ end
 # - Bumps serial
 # - Doesn't overwrite IP addresses in memory (they're newer than the ones in the file)
 def merge_db
-	edited_db = YAML.load_file $config[:db]
+	raw_edited_db = YAML.load_file $config[:db]
+	# Convert all keys except "SERIAL" to lowercase since DNS names are case insensitive
+	edited_db = Hash[ raw_edited_db.map{|key, value| [key != "SERIAL" ? key.downcase : key, value]} ]
 	
 	new_users = edited_db.keys - $db.keys
 	new_users.each do |name|
@@ -207,8 +214,8 @@ def handle_dns_packet(packet)
 end
 
 # Parses a raw packet with one DNS question. Returns the query id,
-# question name and type and if recursion is desired by the client.
-# If parsing fails nil is returned.
+# lower case question name and type and if recursion is desired by
+# the client. If parsing fails nil is returned.
 def parse_dns_question(packet)
 	# Taken from RFC 1035, 4.1.1. Header section format
 	# 
@@ -268,6 +275,10 @@ def parse_dns_question(packet)
 	pos += 1  # Skip the terminating null byte that kicked us out of the loop
 	question_name = labels.join "."
 	question_type, question_class = packet.unpack "@#{pos} n2"
+	
+	# Turn question name into lowercase. DNS names are case insensitive.
+	# See https://tools.ietf.org/html/rfc4343 (Domain Name System (DNS) Case Insensitivity Clarification)
+	question_name.downcase!
 	
 	return id, question_name, question_type, recursion_desired
 rescue StandardError => e

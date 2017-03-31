@@ -21,3 +21,7 @@ ipv4-only:
 ipv6-only:
   pass: pw
   AAAA: ff80::2
+
+rAndOMEcaSe:
+  pass: 
+  A: 192.168.0.1

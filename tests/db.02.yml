@@ -3,3 +3,6 @@ SERIAL: 2015110209
 bar:
   pass: changed-pw
   A: 192.168.0.2
+
+rAndOMEcaSe:
+  pass: 
