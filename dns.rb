@@ -38,6 +38,7 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
                   timeout).
 1.1.1 2017-02-12  The server can now resolve itself by using the name "@" (reported by Chris).
 1.1.2 2017-03-31  Names are now matched case insensitive (reported by SebiTNT).
+                  HTTP server can now be disabled via configuration (requested by SebiTNT).
 
 =end
 
@@ -572,9 +573,15 @@ $config[:db] = options[:db]
 load_db
 
 # Open sockets on privileged ports
-http_server = TCPServer.new $config["http"]["ip"], $config["http"]["port"]
 udp_socket = UDPSocket.new
 udp_socket.bind $config["dns"]["ip"], $config["dns"]["port"]
+
+# Open HTTP server if configured
+http_server = if $config["http"]
+	TCPServer.new $config["http"]["ip"], $config["http"]["port"]
+else
+	nil
+end
 
 # Open HTTPS server if configured
 https_server = if $config["https"]
@@ -610,7 +617,7 @@ Signal.trap "USR1" do
 end
 
 log "SERVER: Running DNS on #{$config["dns"]["ip"]}:#{$config["dns"]["port"]}" +
-	", HTTP on #{$config["http"]["ip"]}:#{$config["http"]["port"]}" +
+	if http_server  then ", HTTP on #{$config["http"]["ip"]}:#{$config["http"]["port"]}"    else "" end +
 	if https_server then ", HTTPS on #{$config["https"]["ip"]}:#{$config["https"]["port"]}" else "" end +
 	"#{running_as}"
 
@@ -626,20 +633,21 @@ log "SERVER: Running DNS on #{$config["dns"]["ip"]}:#{$config["dns"]["port"]}" +
 # makes us less susceptible to DOS attacks since attackers can only saturate that thread.
 # Anyway that server design usually is a bad idea but is adequat for low load and simple
 # (especially given OpenSSL integration).
-Thread.new do
-	loop do
-		# In case https_server is nil we need to remove it from the read array.
-		# Otherwise select doesn't seem to work.
-		ready_servers, _, _ = IO.select [http_server, https_server].compact
-		ready_servers.each do |server|
-			# HTTP/HTTPS connection ready, accept, handle and close it
-			connection = server.accept
-			handle_http_connection connection
-			connection.close
+if http_server or https_server
+	Thread.new do
+		loop do
+			# In case https_server is nil we need to remove it from the read array.
+			# Otherwise select doesn't seem to work.
+			ready_servers, _, _ = IO.select [http_server, https_server].compact
+			ready_servers.each do |server|
+				# HTTP/HTTPS connection ready, accept, handle and close it
+				connection = server.accept
+				handle_http_connection connection
+				connection.close
+			end
 		end
 	end
 end
-
 
 # Mainloop monitoring for incoming UDP packets. If the user presses ctrl+c we exit
 # the mainloop and shutdown the server. When the main thread exits this also kills the
@@ -656,6 +664,7 @@ end
 
 # Server cleanup and shutdown (we just kill of the HTTP thread by ending the main thread)
 log "SERVER: Saving DB and shutting down"
-http_server.close
+https_server.close if https_server
+http_server.close if http_server
 udp_socket.close
 save_db

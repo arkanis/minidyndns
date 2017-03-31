@@ -21,7 +21,8 @@ https:
   ip: 0.0.0.0
   cert: server_cert.pem
   priv_key: server_priv_key.key
-# To disable HTTPS set it to false
+# To disable HTTP and/or HTTPS just set the keys to false instead of the above
+#http: false
 #https: false
 
 # Maximum number of seconds the server waits for clients to send
