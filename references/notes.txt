@@ -16,6 +16,52 @@
 	  https://www.sitepoint.com/the-self-pipe-trick-explained/
 
 
+# EDNS
+
+Overview: https://en.wikipedia.org/wiki/Extension_mechanisms_for_DNS
+RFC: https://tools.ietf.org/html/rfc6891
+
+more than one OPT RR in "additional data": must return FORMERR (RCODE=1) (https://tools.ietf.org/html/rfc6891#section-6.1.1)
+EDNS in query (EDNS record in "additional data", type OPT = 41 (https://tools.ietf.org/html/rfc6891#section-6.1.1))
+	EDNS.version not 0: respond with RCODE=BADVERS
+	must include EDNS record in response
+		name = 0
+		type = 41 (OPT)
+		class = 4096 (UDP payload size we want to support, advise max EDNS payload size, let clients figure out how to avoid fragmentation?)
+		ttl:
+			extended-rcode = ??? (0 means use unmodified RCODE from normal header)
+			version = 0
+			DO = 0 (DNSSEC bit, we don't support it, so no)
+			Z = 0 (reserved)
+		rdlen = 0 (we don't add any attribute-value pairs)
+		rdata: nothing
+else
+	don't put EDNS in response
+
+
+# Decode binary dumps of DNS packets
+
+Use online packet decoder (looks like Wireshark): https://www.gasmi.net/hpd/
+Needs all the raw headers for an UDP paket before it the DNS stuff:
+
+00 1C 0F 09 00 10 00 1C 0F 5C A2 83 81 00 07 CA 08 00 45 00 00 DC D4 31 00 00 F5 11 17 DF 59 2E 65 1F C4 5F 46 53 9F 74 00 35 00 C8 00 00 
+                                                                                                 UDP source port  ~~~~~ ~~|~~ ~~|~~ ~~|~~
+                                                                                            UDP destination port  --------+     |     |
+                                                                                                      UDP length  --------------+     |
+                                                                                                    UDP checksum  --------------------+
+
+For the decoder destination port has to be 53 (0x0035) so it decodes the payload as a DNS packet.
+A wrong length gets reported as error but doesn't stop the decoder. We we can ignore it.
+source port and checksum doesn't matter to us either.
+
+With that header we can just append the hex dump of a DNS packet to get the decoded information, e.g.:
+
+00 1C 0F 09 00 10 00 1C 0F 5C A2 83 81 00 07 CA 08 00 45 00 00 DC D4 31 00 00 F5 11 17 DF 59 2E 65 1F C4 5F 46 53 9F 74 00 35 00 C8 00 00
+be20 0000 0001 0000 0000 0001 ...
+
+Maybe an alternative Python library (scapy): http://stackoverflow.com/questions/6567467/human-readable-form-of-dns-lookup
+
+
 # Links
 
 Trying to create a simple Ruby server over SSL
@@ -26,3 +72,6 @@ Trying to create a simple Ruby server over SSL
 TCP server and UDP socket docs
 	http://ruby-doc.org/stdlib-2.3.1/libdoc/socket/rdoc/TCPServer.html
 	http://ruby-doc.org/stdlib-2.3.1/libdoc/socket/rdoc/UDPSocket.html
+
+List of DNS record types 
+	https://en.wikipedia.org/wiki/List_of_DNS_record_types
