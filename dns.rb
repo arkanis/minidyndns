@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.1.2
+MiniDynDNS v1.1.3
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -39,6 +39,8 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
 1.1.1 2017-02-12  The server can now resolve itself by using the name "@" (reported by Chris).
 1.1.2 2017-03-31  Names are now matched case insensitive (reported by SebiTNT).
                   HTTP server can now be disabled via configuration (requested by SebiTNT).
+1.1.3 2017-04-01  Unknown DNS record types are now printed with their numerical value instead of an empty string
+                  (reported by SebiTNT).
 
 =end
 
@@ -149,14 +151,15 @@ RCODE_NOT_IMPLEMENTED = 4  # The name server does not support the requested kind
 RCODE_REFUSED         = 5  # The name server refuses to perform the specified operation for policy reasons.
 
 # Some handy record type values, see RFC 1035, 3.2.2. TYPE values
-TYPE_A     =  1  # IPv4 host address
-TYPE_NS    =  2  # an authoritative name server
-TYPE_CNAME =  5  # the canonical name for an alias
-TYPE_SOA   =  6  # marks the start of a zone of authority
-TYPE_PTR   = 12  # a domain name pointer
-TYPE_TXT   = 16  # text strings
-TYPE_AAAA  = 28  # IPv6 host address (see RFC 3596, 2.1 AAAA record type)
-TYPE_ALL   = 255 # A request for all records (only valid in question)
+TYPE_A     =   1  # IPv4 host address
+TYPE_NS    =   2  # an authoritative name server
+TYPE_CNAME =   5  # the canonical name for an alias
+TYPE_SOA   =   6  # marks the start of a zone of authority
+TYPE_PTR   =  12  # a domain name pointer
+TYPE_MX    =  15  # a domain name pointer
+TYPE_TXT   =  16  # text strings
+TYPE_AAAA  =  28  # IPv6 host address (see RFC 3596, 2.1 AAAA record type)
+TYPE_ALL   = 255  # A request for all records (only valid in question)
 
 
 # We try to ignore packets from possible attacks (queries for different domains)
@@ -168,7 +171,7 @@ TYPE_ALL   = 255 # A request for all records (only valid in question)
 # known subdomain    → answer
 def handle_dns_packet(packet)
 	id, domain, type, recursion_desired = parse_dns_question(packet)
-	type_as_string = { TYPE_A => "A", TYPE_AAAA => "AAAA", TYPE_SOA => "SOA", TYPE_ALL => "ANY" }[type] or "???"
+	type_as_string = { TYPE_A => "A", TYPE_AAAA => "AAAA", TYPE_SOA => "SOA", TYPE_ALL => "ANY" }[type] || "type(#{type})"
 	
 	# Don't respond if we failed to parse the packet
 	log "DNS: Failed to parse DNS packet" and return nil unless id
