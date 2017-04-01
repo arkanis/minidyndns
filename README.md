@@ -9,6 +9,12 @@ A simple no fuss DNS server with an build in HTTP/HTTPS interface to update IPs.
 - The server should be stared as root so it can bind to privileged ports (like 53 for DNS). It'll then drop privileges.
 - Only requires Ruby 1.9 or newer. No other dependencies.
 
+Stuff to look out for:
+
+- Only A and AAAA records are supported. CNAME, TXT, MX and so on won't work. Ask me or open an issue if you need that.
+- HTTPS: I'm not sure how stable or reliable Rubys OpenSSL integration actually is. I've had some funny effects I can't
+  pinpoint. Again, let me know if something comes up.
+- FritzBox users: Be aware of the DNS rebind protection (DNS-Rebind-Schutz). The FritzBox will silently drop all DNS responses that contain public IPv6 addresses of devices in your home network. You'll have to add each domain name to a whitelist in your router configuration (see issue #3).
 
 ## Installation
 

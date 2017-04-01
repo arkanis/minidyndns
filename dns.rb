@@ -150,7 +150,8 @@ RCODE_NAME_ERROR      = 3  # This code signifies that the domain name referenced
 RCODE_NOT_IMPLEMENTED = 4  # The name server does not support the requested kind of query.
 RCODE_REFUSED         = 5  # The name server refuses to perform the specified operation for policy reasons.
 
-# Some handy record type values, see RFC 1035, 3.2.2. TYPE values
+# Some handy record type values, see RFC 1035, 3.2.2. TYPE values.
+# Also a nice overview with numeric values: https://en.wikipedia.org/wiki/List_of_DNS_record_types
 TYPE_A     =   1  # IPv4 host address
 TYPE_NS    =   2  # an authoritative name server
 TYPE_CNAME =   5  # the canonical name for an alias
