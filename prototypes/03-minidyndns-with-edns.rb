@@ -1,0 +1,767 @@
+=begin
+
+MiniDynDNS v1.1.3
+by Stephan Soller <stephan.soller@helionweb.de>
+
+# About the source code
+
+To keep the source code hackable and easier to understand it's organized in
+sections rather than classes. I've tried several class layouts but rejected them
+all because they added to much boiler plate and self organization code. But feel
+free to give it a try.
+
+Two global variables are used throughout the code:
+
+$config: The servers configuration, per default loaded from config.yml
+$db: The DNS database, per default loaded and automatically saved to db.yml
+
+Some functions don't take any parameters at all. They usually operate on the
+global variables.
+
+# Running tests
+
+Execute tests/test.rb to put the DNS server through the paces. Run it as root
+(e.g. via sudo) to test privilege dropping.
+
+# Version history
+
+1.0.0 2015-11-06  Initial release.
+1.0.1 2015-11-08  Removed a left over debug output line.
+1.0.2 2015-11-19  Trying to update records without a password now returns 403
+                  forbidden. They're unchangable.
+                  Errors during HTTP or DNS requests are now logged to stderr.
+1.0.3 2015-11-25  An empty answer is now returned if we can't find the requested record but the name has other records
+                  (RFC 4074 4.2. Return "Name Error").
+1.1.0 2017-01-06  Added HTTPS support.
+                  Fixed hanging HTTP connections of stupid routers breaking DNS
+                  the server (moved HTTP servers into extra thread and imposed
+                  timeout).
+1.1.1 2017-02-12  The server can now resolve itself by using the name "@" (reported by Chris).
+1.1.2 2017-03-31  Names are now matched case insensitive (reported by SebiTNT).
+                  HTTP server can now be disabled via configuration (requested by SebiTNT).
+1.1.3 2017-04-01  Unknown DNS record types are now printed with their numerical value instead of an empty string
+                  (reported by SebiTNT).
+xxxxx 2017-04-01  Implemented EDNS in the hopes that this would make AAAA records work for the FritzBox (cause of the
+                  bug was the "DNS-Rebind-Schutz".
+                  Debug: Server dumps queries and answers into files.
+
+=end
+
+require "optparse"
+require "yaml"
+require "etc"
+require "socket"
+require "cgi"
+require "base64"
+require "ipaddr"
+require "openssl"
+require "timeout"
+
+
+#
+# Logging functions to output messages with timestamps
+#
+
+# Returns true so it can be used with the "and" operator like this:
+#   log("...") and return if something.broke?
+def log(message)
+	puts Time.now.strftime("%Y-%m-%d %H:%M:%S") + " " + message
+	return true
+end
+
+def error(message)
+	$stderr.puts Time.now.strftime("%Y-%m-%d %H:%M:%S") + " " + message
+	return true
+end
+
+# Outputs to STDERR and exits. This way admins can redirect all errors
+# into a different file if they want.
+def die(message)
+	abort Time.now.strftime("%Y-%m-%d %H:%M:%S") + " " + message
+end
+
+
+#
+# "Database" code
+#
+
+# If loading the DB fails an empty DB with a new serial is generated.
+def load_db
+	raw_db = begin
+		YAML.load_file $config[:db]
+	rescue Errno::ENOENT
+		false
+	end
+	raw_db = {} unless raw_db.kind_of? Hash
+	
+	# Convert all keys except "SERIAL" to lowercase since DNS names are case insensitive
+	$db = Hash[ raw_db.map{|key, value| [key != "SERIAL" ? key.downcase : key, value]} ]
+	
+	$db["SERIAL"] = Time.now.strftime("%Y%m%d00").to_i unless $db.include? "SERIAL"
+end
+
+def save_db
+	File.write $config[:db], YAML.dump($db)
+end
+
+# Updates the in-memory DB with new data from the DB file.
+# 
+# - Adds users and IPs that don't exist yet
+# - Deletes users no longer in the DB file
+# - Loads passwords of all users from the DB file
+# - Bumps serial
+# - Doesn't overwrite IP addresses in memory (they're newer than the ones in the file)
+def merge_db
+	raw_edited_db = YAML.load_file $config[:db]
+	# Convert all keys except "SERIAL" to lowercase since DNS names are case insensitive
+	edited_db = Hash[ raw_edited_db.map{|key, value| [key != "SERIAL" ? key.downcase : key, value]} ]
+	
+	new_users = edited_db.keys - $db.keys
+	new_users.each do |name|
+		$db[name] = edited_db[name]
+	end
+	
+	deleted_users = $db.keys - edited_db.keys
+	deleted_users.each do |name|
+		$db.delete name
+	end
+	
+	edited_db.each do |name, edited_data|
+		next if name == "SERIAL"
+		$db[name]["pass"] = edited_data["pass"]
+	end
+	
+	$db["SERIAL"] += 1
+	
+	log "SERVER: Updated DB from file, added #{new_users.join(", ")}, deleted #{deleted_users.join(", ")}, updated passwords and serial"
+rescue Errno::ENOENT
+	nil
+end
+
+
+
+#
+# DNS server code
+#
+
+# Possible values for the RCODE field (response code) in the
+# DNS header, see RFC 1035, 4.1.1. Header section format
+RCODE_NO_ERROR        = 0
+RCODE_FORMAT_ERROR    = 1  # The name server was unable to interpret the query.
+RCODE_SERVER_FAILURE  = 2  # The name server was unable to process this query due to a problem with the name server.
+RCODE_NAME_ERROR      = 3  # This code signifies that the domain name referenced in the query does not exist.
+RCODE_NOT_IMPLEMENTED = 4  # The name server does not support the requested kind of query.
+RCODE_REFUSED         = 5  # The name server refuses to perform the specified operation for policy reasons.
+
+# Some handy record type values, see RFC 1035, 3.2.2. TYPE values.
+# Also a nice overview with numeric values: https://en.wikipedia.org/wiki/List_of_DNS_record_types
+TYPE_A     =   1  # IPv4 host address
+TYPE_NS    =   2  # an authoritative name server
+TYPE_CNAME =   5  # the canonical name for an alias
+TYPE_SOA   =   6  # marks the start of a zone of authority
+TYPE_PTR   =  12  # a domain name pointer
+TYPE_MX    =  15  # a domain name pointer
+TYPE_TXT   =  16  # text strings
+TYPE_AAAA  =  28  # IPv6 host address (see RFC 3596, 2.1 AAAA record type)
+TYPE_OPT   =  41  # Pseudo-Record used by EDNS to extend header fields (see RFC 6891, 6.1.1. Basic Elements)
+TYPE_ALL   = 255  # A request for all records (only valid in question)
+
+
+# We try to ignore packets from possible attacks (queries for different domains)
+# 
+# packet parse error → ignore
+# SOA for our domain → answer
+# not our domain     → ignore
+# unknown subdomain  → not found
+# known subdomain    → answer
+def handle_dns_packet(packet)
+	id, domain, type, recursion_desired, use_edns = parse_dns_question(packet)
+	type_as_string = { TYPE_A => "A", TYPE_AAAA => "AAAA", TYPE_SOA => "SOA", TYPE_ALL => "ANY" }[type] || "type(#{type})"
+	
+	log "DEBUG: DNS query id #{id}"
+	File.write("#{id}_query", packet)
+
+	
+	# Don't respond if we failed to parse the packet
+	log "DNS: Failed to parse DNS packet" and return nil unless id
+	
+	# Respond with a proper start of authority answer if someone wants to know
+	if domain == $config["domain"] and (type == TYPE_SOA or type == TYPE_ALL)
+		log "DNS: #{type_as_string} #{domain} -> SOA #{$config["soa"]["nameserver"]}, #{$config["soa"]["mail"]}, ..."
+		mail_name, mail_domain = $config["soa"]["mail"].split("@", 2)
+		encoded_mail = mail_name.gsub(".", "\\.") + "." + mail_domain
+		return build_dns_answer id, recursion_desired, RCODE_NO_ERROR, domain, type, use_edns, resource_record(TYPE_SOA, $config["soa"]["ttl"],
+			soa_rdata($config["soa"]["nameserver"], encoded_mail, $db["SERIAL"], $config["soa"]["refresh_time"], $config["soa"]["retry_time"], $config["soa"]["expire_time"], $config["soa"]["negative_caching_ttl"])
+		)
+	end
+	
+	# Don't respond if the domain isn't a subdomain of our domain or our domain itself
+	log "DNS: #{type_as_string} #{domain} -> wrong domain, ignoring" and return nil unless domain.end_with?($config["domain"])
+	
+	# Reply with a name error if we don't know the subdomain. If we have to resolve the server itself use the name "@" for the
+	# lookup. "@" is an alias for the zone origin in zone files so we use it here for the same purpose (a name refering to the
+	# server itself).
+	name = domain[0..-($config["domain"].bytesize + 2)]
+	name = "@" if name == ""
+	unless $db[name]
+		log "DNS: #{type_as_string} #{name} -> not found"
+		return build_dns_answer id, recursion_desired, RCODE_NAME_ERROR, domain, type, use_edns
+	end
+	
+	begin
+		records, texts = [], []
+		records << resource_record(TYPE_A,    $config["ttl"], IPAddr.new($db[name]["A"]).hton)    and texts << $db[name]["A"]    if (type == TYPE_A    or type == TYPE_ALL) and $db[name]["A"]
+		records << resource_record(TYPE_AAAA, $config["ttl"], IPAddr.new($db[name]["AAAA"]).hton) and texts << $db[name]["AAAA"] if (type == TYPE_AAAA or type == TYPE_ALL) and $db[name]["AAAA"]
+	rescue ArgumentError
+		log "DNS: #{type_as_string} #{name} -> server fail, invalid IP in DB"
+		return build_dns_answer id, recursion_desired, RCODE_SERVER_FAILURE, domain, type, use_edns
+	end
+	
+	if records.empty?
+		log "DNS: #{type_as_string} #{name} -> no records returned"
+		return build_dns_answer id, recursion_desired, RCODE_NO_ERROR, domain, type, use_edns
+	else
+		log "DNS: #{type_as_string} #{name} -> #{texts.join(", ")}"
+		return build_dns_answer id, recursion_desired, RCODE_NO_ERROR, domain, type, use_edns, *records
+	end
+end
+
+# Parses a raw packet with one DNS question. Returns the query id,
+# lower case question name and type, if recursion is desired by the
+# client and if EDNS is supported by the client. If parsing fails
+# nil is returned.
+def parse_dns_question(packet)
+	# Taken from RFC 1035, 4.1.1. Header section format
+	# 
+	#                                 1  1  1  1  1  1
+	#   0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                      ID                       |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |QR|   Opcode  |AA|TC|RD|RA|   Z    |   RCODE   |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                    QDCOUNT                    |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                    ANCOUNT                    |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                    NSCOUNT                    |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                    ARCOUNT                    |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# 
+	# Z (bits 9, 10 and 11) are reserved and should be zero
+	id, flags, question_count, answer_count, nameserver_count, additions_count = packet.unpack("n6")
+	is_response         = (flags & 0b1000000000000000) >> 15
+	opcode              = (flags & 0b0111100000000000) >> 11
+	authoritative_anser = (flags & 0b0000010000000000) >> 10
+	truncated           = (flags & 0b0000001000000000) >> 9
+	recursion_desired   = (flags & 0b0000000100000000) >> 8
+	recursion_available = (flags & 0b0000000010000000) >> 7
+	response_code       = (flags & 0b0000000000001111) >> 0
+	
+	# Only continue when the packet is a standard query (QUERY, opcode == 0 and is_response = 0) with exactly one question.
+	# This way we don't have to care about pointers in the question section (see RFC 1035, 4.1.4. Message compression).
+	# Ignore answer, nameserver and additions counts since we don't need them to parse a basic DNS query. But we'll look
+	# at them later to check for EDNS information.
+	return unless opcode == 0 and is_response == 0 and question_count == 1
+	
+	
+	# Taken from RFC 1035, 4.1.2. Question section format
+	# 
+	#                                 1  1  1  1  1  1
+	#   0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                                               |
+	# /                     QNAME                     /
+	# /                                               /
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                     QTYPE                     |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                     QCLASS                    |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	
+	pos = 6*2
+	labels = []
+	while (length = packet.byteslice(pos).ord) > 0
+		labels << packet.byteslice(pos + 1, length)
+		pos += 1 + length
+		break if pos > packet.bytesize
+	end
+	pos += 1  # Skip the terminating null byte that kicked us out of the loop
+	question_name = labels.join "."
+	question_type, question_class = packet.unpack "@#{pos} n2"
+	pos += 2*2
+	
+	# Turn question name into lowercase. DNS names are case insensitive.
+	# See https://tools.ietf.org/html/rfc4343 (Domain Name System (DNS) Case Insensitivity Clarification)
+	question_name.downcase!
+	
+	edns_support = false
+	if answer_count == 0 and nameserver_count == 0 and additions_count == 1
+		# Parsed the question, look for an EDNS OPT resource record in the additions section. We only do this if we got
+		# no other resource records in between. Otherwise we would have to parse them and that would mean we would have
+		# to implement pointers for domain name labels.
+		# 
+		# Taken from RFC 6891, Extension Mechanisms for DNS (EDNS(0)), 6.1.2.  Wire Format
+		# 
+		# +------------+--------------+------------------------------+
+		# | Field Name | Field Type   | Description                  |
+		# +------------+--------------+------------------------------+
+		# | NAME       | domain name  | MUST be 0 (root domain)      |
+		# | TYPE       | u_int16_t    | OPT (41)                     |
+		# | CLASS      | u_int16_t    | requestor's UDP payload size |
+		# | TTL        | u_int32_t    | extended RCODE and flags     |
+		# | RDLEN      | u_int16_t    | length of all RDATA          |
+		# | RDATA      | octet stream | {attribute,value} pairs      |
+		# +------------+--------------+------------------------------+
+		# 
+		# We ignore the RDLEN and RDATA field since we don't look into the attribute-value pairs. We don't implement any
+		# attributes so no need to parse them.
+		# 
+		# 6.1.3.  OPT Record TTL Field Use
+		# 
+		#               +0 (MSB)                            +1 (LSB)
+		#    +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		# 0: |         EXTENDED-RCODE        |            VERSION            |
+		#    +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		# 2: | DO|                           Z                               |
+		#    +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		# 
+		# We only check the version field here and ignore the rest. We don't do anything with the information.
+		edns_name, edns_type, edns_payload_size, edns_ext_rcode, edns_version, edns_flags = packet.unpack "@#{pos} C n n C C C"
+		edns_support = true if edns_name == 0 and edns_type == TYPE_OPT and edns_version == 0
+	end
+	
+	return id, question_name, question_type, recursion_desired, edns_support
+rescue StandardError => e
+	error "DNS: Failed to parse request: #{e}"
+	e.backtrace.each do |stackframe|
+		$stderr.puts "\t#{stackframe}"
+	end
+end
+
+def build_dns_answer(id, recursion_desired, response_code, domain, question_type, use_edns, *answers)
+	# Build EDNS pseudo-record to advise a larger packet size if the client used EDNS in the query
+	additional_records = []
+	if use_edns
+		# Taken from RFC 6891, Extension Mechanisms for DNS (EDNS(0)), 6.1.2.  Wire Format
+		# 
+		# +------------+--------------+------------------------------+
+		# | Field Name | Field Type   | Description                  |
+		# +------------+--------------+------------------------------+
+		# | NAME       | domain name  | MUST be 0 (root domain)      |
+		# | TYPE       | u_int16_t    | OPT (41)                     |
+		# | CLASS      | u_int16_t    | requestor's UDP payload size |
+		# | TTL        | u_int32_t    | extended RCODE and flags     |
+		# | RDLEN      | u_int16_t    | length of all RDATA          |
+		# | RDATA      | octet stream | {attribute,value} pairs      |
+		# +------------+--------------+------------------------------+
+		# 
+		# 6.1.3.  OPT Record TTL Field Use
+		# 
+		#               +0 (MSB)                            +1 (LSB)
+		#    +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		# 0: |         EXTENDED-RCODE        |            VERSION            |
+		#    +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		# 2: | DO|                           Z                               |
+		#    +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		# 
+		# 
+		max_payload_size = 4096
+		edns_ext_rcode = 0
+		edns_version = 0
+		edns_dnssec_ok = 0
+		edns_rdlen = 0
+		
+		edns_flags = 0
+		edns_flags |= (edns_dnssec_ok & 0b1) << 15
+		edns_opt_record = [0, TYPE_OPT, max_payload_size, edns_ext_rcode, edns_version, edns_flags, edns_rdlen].pack "C n n C C n n"
+		additional_records << edns_opt_record
+	end
+	
+	# Assemble flags for header
+	is_response = 1          # We send a response, so QR bit is set to 1
+	opcode = 0               # Opcode 0 (a standard query)
+	authoritative_anser = 1  # Authoritative answer, AA bit set to 1
+	truncated = 0            # Not truncated, TC set to 0
+	recursion_available = 0  # Recursion available, not implemented so set to 0
+	
+	# Build header for the answer.
+	# Taken from RFC 1035, 4.1.1. Header section format
+	# 
+	#                                 1  1  1  1  1  1
+	#   0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                      ID                       |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |QR|   Opcode  |AA|TC|RD|RA|   Z    |   RCODE   |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                    QDCOUNT                    |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                    ANCOUNT                    |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                    NSCOUNT                    |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                    ARCOUNT                    |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# 
+	# Z (bits 9, 10 and 11) are reserved and should be zero
+	flags = 0
+	flags |= (is_response         << 15) & 0b1000000000000000
+	flags |= (opcode              << 11) & 0b0111100000000000
+	flags |= (authoritative_anser << 10) & 0b0000010000000000
+	flags |= (truncated           <<  9) & 0b0000001000000000
+	flags |= (recursion_desired   <<  8) & 0b0000000100000000
+	flags |= (recursion_available <<  7) & 0b0000000010000000
+	flags |= (response_code       <<  0) & 0b0000000000001111
+	
+	header = [
+		id,
+		flags,
+		1,                         # question count
+		answers.length,            # answer count
+		0,                         # name server count
+		additional_records.length  # additional records count
+	].pack "n6"
+	
+	# Build original question from query.
+	# Taken from RFC 1035, 4.1.2. Question section format
+	# 
+	#                                 1  1  1  1  1  1
+	#   0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                                               |
+	# /                     QNAME                     /
+	# /                                               /
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                     QTYPE                     |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	# |                     QCLASS                    |
+	# +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+	question_class = 1  # 1 = IN, the Internet
+	question  = domain.split(".").collect{|label| label.bytesize.chr + label}.join("") + "\x00"
+	question += [question_type, question_class].pack "n2"
+	
+	
+	packet = header + question + answers.join("") + additional_records.join("")
+	
+	log "DEBUG: DNS answer id #{id}"
+	File.write("#{id}_answer", packet)
+	
+	return packet
+end
+
+
+
+#
+# DNS utility code to construct parts of DNS packets
+#
+
+
+# 3.1. Name space definitions
+# 
+# Domain names in messages are expressed in terms of a sequence of labels.
+# Each label is represented as a one octet length field followed by that
+# number of octets.  Since every domain name ends with the null label of
+# the root, a domain name is terminated by a length byte of zero.  The
+# high order two bits of every length octet must be zero, and the
+# remaining six bits of the length field limit the label to 63 octets or
+# less.
+def domain_name(domain)
+	domain.split(".").collect do |label|
+		trimmed_label = label.byteslice(0, 63)
+		trimmed_label.bytesize.chr + trimmed_label
+	end.join("") + "\x00"
+end
+
+# Payload of an SOA record, see 3.3.13. SOA RDATA format
+def soa_rdata(source_host, mail, serial, refresh_interval, retry_interval, expire_interval, minimum_ttl)
+    [
+    	domain_name(source_host),
+    	domain_name(mail),
+    	serial,
+    	refresh_interval,
+    	retry_interval,
+    	expire_interval,
+    	minimum_ttl
+    ].pack("a* a* N5")
+end
+
+# Generates a resource record fo the specified type, ttl in seconds
+# (0 = no caching) and payload. The record always references the name of
+# the first question in the packet and is always for the IN class
+# (the Internet). See 4.1.3. Resource record format.
+def resource_record(type, ttl, payload)
+	header = [
+		# If the first 2 bits are set to 1 the length is interpreted as an offset into the packet where the name is
+		# stored. We use this to reference the name in the first question that starts directly after the 12 byte header.
+		# See RFC 1035, 4.1.4. Message compression.
+		(0b1100000000000000 | 12),
+		type,
+		1,     # 1 = class IN (the Internet)
+		ttl,   # TTL, time in seconds that the answer may be cached, 0 = no caching
+		payload.bytesize
+	].pack("n3 N n")
+	return header + payload
+end
+
+
+
+#
+# HTTP server code
+#
+
+# Handles an entire HTTP connection from start to finish. Replies with
+# an HTTP/1.0 answer so the content automatically ends when we close
+# the connection.
+# 
+# Only reacts to the basic authentication header and myip query parameter.
+# Everything else is ignored right now (path, other parameters or headers).
+def handle_http_connection(connection)
+	log_prefix = if connection.is_a? OpenSSL::SSL::SSLSocket then "HTTPS" else "HTTP" end
+	
+	# Read the entire request from the connection and fill the local variables.
+	# This must not take longer that the configured number of seconds or we'll kill the connection.
+	# The idea is to handle all connections in a single thread (to avoid DOS attacks) but prevent
+	# stupids router from keeping connections open for ever.
+	method, path_and_querystring, params, user, password = nil, nil, nil, nil, nil
+	begin
+		# I know timeout() is considered harmful but we rely on the global interpreter lock anyway to
+		# synchronize access to $db. So the server only works correctly with interpreters that have a
+		# global interpreter lock (e.g. MRI). Also this server isn't designed for high-load scenarios.
+		# Given that timeout() won't hurt us to much... I hope.
+		Timeout::timeout($config["http_timeout"]) do
+			# Ignore empty TCP connections from chrome
+			request_line = connection.gets("\n")
+			return unless request_line and request_line.length > 0
+			
+			# Extract path and URL parameters
+			method, path_and_querystring, _ = request_line.chomp.split(" ", 3)
+			path, query_string = path_and_querystring.split("?", 2)
+			params = query_string ? CGI::parse(query_string) : {}
+			
+			# Extract user and password from HTTP headers
+			user, password = nil, nil
+			until (line = connection.gets("\n").chomp) == ""
+				name, value = line.split(": ", 2)
+				if name.downcase == "authorization"
+					auth_method, rest = value.split(" ", 2)
+					if auth_method.downcase == "basic"
+						user, password = Base64.decode64(rest).split(":", 2)
+					end
+				end
+			end
+		end
+	rescue Timeout::Error
+		log "#{log_prefix}: Client took to long to send data, ignoring"
+		return
+	end
+	
+	# Process request
+	ip_as_string = nil
+	status = catch :status do
+		# Mare sure we got auth information
+		throw :status, :not_authorized unless user and $db[user]
+		# Tell the client if the name can't be changed
+		throw :status, :unchangable if $db[user]["pass"].to_s.strip == ""
+		# Make sure we're authenticated
+		throw :status, :not_authorized unless password == $db[user]["pass"]
+		# Make sure we got the necessary params
+		throw :status, :bad_request unless params["myip"]
+		
+		ip_as_string = CGI::unescape params["myip"].first
+		if ip_as_string == ''
+			$db[user]["A"]    = nil
+			$db[user]["AAAA"] = nil
+		else
+			begin
+				ip = IPAddr.new ip_as_string
+			rescue ArgumentError
+				throw :status, :bad_request
+			end
+			if ip.ipv4?
+				$db[user]["A"] = ip_as_string
+			elsif ip.ipv6?
+				$db[user]["AAAA"] = ip_as_string
+			else
+				throw :status, :bad_request
+			end
+		end
+		
+		$db["SERIAL"] += 1
+		save_db
+		:ok
+	end
+	
+	case status
+	when :ok
+		log "#{log_prefix}: #{method} #{path_and_querystring} -> updated #{user} to #{ip_as_string}"
+		connection.write [
+			"HTTP/1.0 200 OK",
+			"Content-Type: text/plain",
+			"",
+			"Your IP has been updated"
+		].join("\r\n")
+	when :bad_request
+		log "#{log_prefix}: #{method} #{path_and_querystring} -> bad request for #{user}"
+		connection.write [
+			"HTTP/1.0 400 Bad Request",
+			"Content-Type: text/plain",
+			"",
+			"You need to specify a new IP in the myip URL parameter"
+		].join("\r\n")
+	when :unchangable
+		log "#{log_prefix}: #{method} #{path_and_querystring} -> denied, #{user} unchangable"
+		connection.write [
+			"HTTP/1.0 403 Forbidden",
+			"Content-Type: text/plain",
+			"",
+			"This IP address can't be changed, sorry."
+		].join("\r\n")
+	else
+		log "#{log_prefix}: #{method} #{path_and_querystring} -> not authorized"
+		connection.write [
+			"HTTP/1.0 401 Not Authorized",
+			'WWW-Authenticate: Basic realm="Your friendly DynDNS server"',
+			"Content-Type: text/plain",
+			"",
+			"Authentication required"
+		].join("\r\n")
+	end
+rescue StandardError => e
+	error "#{log_prefix}: Failed to process request: #{e}"
+	e.backtrace.each do |stackframe|
+		$stderr.puts "\t#{stackframe}"
+	end
+end
+
+
+
+#
+# Server startup
+#
+
+# Parse command line arguments
+options = { config: "config.yml", db: "db.yml" }
+OptionParser.new "Usage: dns.rb [options]", 20 do |opts|
+	opts.on "-cFILE", "--config FILE", "YAML file containing the server configuration. Default: #{options[:config]}" do |value|
+		options[:config] = value
+	end
+	opts.on "-dFILE", "--db FILE", "YAML file used to rembmer the IP addresses and passwords of DNS records. Default: #{options[:db]}" do |value|
+		options[:db] = value
+	end
+	opts.on_tail "-h", "--help", "Show help" do
+		puts opts
+		exit
+	end
+end.parse!
+
+# Load configuration
+$config = begin
+	YAML.load_file options[:config]
+rescue Errno::ENOENT
+	die "SERVER: Failed to load config file #{options[:config]}, sorry."
+end
+$config[:db] = options[:db]
+
+# Load the database
+load_db
+
+# Open sockets on privileged ports
+udp_socket = UDPSocket.new
+udp_socket.bind $config["dns"]["ip"], $config["dns"]["port"]
+
+# Open HTTP server if configured
+http_server = if $config["http"]
+	TCPServer.new $config["http"]["ip"], $config["http"]["port"]
+else
+	nil
+end
+
+# Open HTTPS server if configured
+https_server = if $config["https"]
+	https_tcp_server = TCPServer.new $config["https"]["ip"], $config["https"]["port"]
+	ssl_context = OpenSSL::SSL::SSLContext.new
+	ssl_context.cert = OpenSSL::X509::Certificate.new File.open($config["https"]["cert"])
+	ssl_context.key = OpenSSL::PKey::RSA.new File.open($config["https"]["priv_key"])
+	OpenSSL::SSL::SSLServer.new https_tcp_server, ssl_context
+else
+	nil
+end
+
+# Drop privileges, based on http://timetobleed.com/5-things-you-dont-know-about-user-ids-that-will-destroy-you/
+running_as = nil
+if Process.uid == 0
+	Process::Sys.setgid Etc.getgrnam($config["group"]).gid
+	Process.groups = []
+	Process::Sys.setuid Etc.getpwnam($config["user"]).uid
+	die "SERVER: Failed to drop privileges!" if begin
+		Process::Sys.setuid 0
+	rescue Errno::EPERM
+		false
+	else
+		true
+	end
+	
+	running_as = ", as user #{$config["user"]}:#{$config["group"]}"
+end
+
+# Merge the updated DB file with the data we have in memory if someone sends us the USR1 signal
+Signal.trap "USR1" do
+	merge_db
+end
+
+log "SERVER: Running DNS on #{$config["dns"]["ip"]}:#{$config["dns"]["port"]}" +
+	if http_server  then ", HTTP on #{$config["http"]["ip"]}:#{$config["http"]["port"]}"    else "" end +
+	if https_server then ", HTTPS on #{$config["https"]["ip"]}:#{$config["https"]["port"]}" else "" end +
+	"#{running_as}"
+
+
+#
+# Server mainloops (extra thread for HTTP and HTTPS servers, DNS in main thread)
+#
+
+# Handle HTTP/HTTPS connections in an extra thread so they don't block
+# handling of DNS requests. We rely on the global interpreter lock to synchronize
+# access to the $db variable.
+# All incoming connections are handled one after the other by that thread. This hopefully
+# makes us less susceptible to DOS attacks since attackers can only saturate that thread.
+# Anyway that server design usually is a bad idea but is adequat for low load and simple
+# (especially given OpenSSL integration).
+if http_server or https_server
+	Thread.new do
+		loop do
+			# In case https_server is nil we need to remove it from the read array.
+			# Otherwise select doesn't seem to work.
+			ready_servers, _, _ = IO.select [http_server, https_server].compact
+			ready_servers.each do |server|
+				# HTTP/HTTPS connection ready, accept, handle and close it
+				connection = server.accept
+				handle_http_connection connection
+				connection.close
+			end
+		end
+	end
+end
+
+# Mainloop monitoring for incoming UDP packets. If the user presses ctrl+c we exit
+# the mainloop and shutdown the server. When the main thread exits this also kills the
+# HTTP thread above.
+loop do
+	begin
+		# Use the maximum EDNS payload size of 4096 as packet limit. Without EDNS the
+		# limit was 512 byte per packet.
+		packet, (_, port, _, addr) = udp_socket.recvfrom 4096
+		answer = handle_dns_packet packet
+		udp_socket.send answer, 0, addr, port if answer
+	rescue Interrupt
+		break
+	end
+end
+
+# Server cleanup and shutdown (we just kill of the HTTP thread by ending the main thread)
+log "SERVER: Saving DB and shutting down"
+https_server.close if https_server
+http_server.close if http_server
+udp_socket.close
+save_db
