@@ -90,10 +90,13 @@ test "empty answer for no IPv4 address",
 	"status: NOERROR",
 	"ANSWER: 0"
 
-# SOA for server
+# SOA and NS records for server itself
 test "SOA record for nameserver itself",
 	"SOA", "dyn.example.com",
 	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110209 86400 7200 3600000 172800"
+test "NS record for nameserver itself",
+	"NS", "dyn.example.com",
+	"dyn.example.com.	86400	IN	NS	ns.example.com."
 
 # Changing IPs
 test "A record before change",

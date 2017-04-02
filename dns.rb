@@ -41,6 +41,7 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
                   HTTP server can now be disabled via configuration (requested by SebiTNT).
 1.1.3 2017-04-01  Unknown DNS record types are now printed with their numerical value instead of an empty string
                   (reported by SebiTNT).
+1.1.4 2017-04-02  Server now answers NS queries about itself (reported by SebiTNT).
 
 =end
 
@@ -172,46 +173,58 @@ TYPE_ALL   = 255  # A request for all records (only valid in question)
 # known subdomain    → answer
 def handle_dns_packet(packet)
 	id, domain, type, recursion_desired = parse_dns_question(packet)
-	type_as_string = { TYPE_A => "A", TYPE_AAAA => "AAAA", TYPE_SOA => "SOA", TYPE_ALL => "ANY" }[type] || "type(#{type})"
+	type_as_string = { TYPE_A => "A", TYPE_AAAA => "AAAA", TYPE_SOA => "SOA", TYPE_NS => "NS", TYPE_ALL => "ANY" }[type] || "type(#{type})"
 	
 	# Don't respond if we failed to parse the packet
 	log "DNS: Failed to parse DNS packet" and return nil unless id
 	
-	# Respond with a proper start of authority answer if someone wants to know
-	if domain == $config["domain"] and (type == TYPE_SOA or type == TYPE_ALL)
-		log "DNS: #{type_as_string} #{domain} -> SOA #{$config["soa"]["nameserver"]}, #{$config["soa"]["mail"]}, ..."
-		mail_name, mail_domain = $config["soa"]["mail"].split("@", 2)
-		encoded_mail = mail_name.gsub(".", "\\.") + "." + mail_domain
-		return build_dns_answer id, recursion_desired, RCODE_NO_ERROR, domain, type, resource_record(TYPE_SOA, $config["soa"]["ttl"],
-			soa_rdata($config["soa"]["nameserver"], encoded_mail, $db["SERIAL"], $config["soa"]["refresh_time"], $config["soa"]["retry_time"], $config["soa"]["expire_time"], $config["soa"]["negative_caching_ttl"])
-		)
-	end
-	
 	# Don't respond if the domain isn't a subdomain of our domain or our domain itself
 	log "DNS: #{type_as_string} #{domain} -> wrong domain, ignoring" and return nil unless domain.end_with?($config["domain"])
 	
-	# Reply with a name error if we don't know the subdomain. If we have to resolve the server itself use the name "@" for the
-	# lookup. "@" is an alias for the zone origin in zone files so we use it here for the same purpose (a name refering to the
-	# server itself).
+	# Extract the subdomain we're looking up (e.g. "foo" out of "foo.dyn.example.com"). Use "@" if someone asks about
+	# the server itself (e.g. "@" for "dyn.example.com"). "@" is an alias for the zone origin in zone files so we use it
+	# here for the same purpose (a name refering to the server itself).
 	name = domain[0..-($config["domain"].bytesize + 2)]
 	name = "@" if name == ""
-	unless $db[name]
-		log "DNS: #{type_as_string} #{name} -> not found"
-		return build_dns_answer(id, recursion_desired, RCODE_NAME_ERROR, domain, type)
+	records, texts = [], []
+	
+	# Add special start of authority (SOA) and/or nameserver (NS) records to the answer when someone asks about the
+	# server itself.
+	if name == "@" and (type == TYPE_SOA or type == TYPE_ALL)
+		mail_name, mail_domain = $config["soa"]["mail"].split("@", 2)
+		encoded_mail = mail_name.gsub(".", "\\.") + "." + mail_domain
+		records << resource_record(TYPE_SOA, $config["soa"]["ttl"],
+			soa_rdata($config["soa"]["nameserver"], encoded_mail, $db["SERIAL"], $config["soa"]["refresh_time"], $config["soa"]["retry_time"], $config["soa"]["expire_time"], $config["soa"]["negative_caching_ttl"])
+		)
+		texts << "SOA(#{$config["soa"]["nameserver"]}, #{$config["soa"]["mail"]}, ...)"
 	end
 	
-	begin
-		records, texts = [], []
-		records << resource_record(TYPE_A,    $config["ttl"], IPAddr.new($db[name]["A"]).hton)    and texts << $db[name]["A"]    if (type == TYPE_A    or type == TYPE_ALL) and $db[name]["A"]
-		records << resource_record(TYPE_AAAA, $config["ttl"], IPAddr.new($db[name]["AAAA"]).hton) and texts << $db[name]["AAAA"] if (type == TYPE_AAAA or type == TYPE_ALL) and $db[name]["AAAA"]
-	rescue ArgumentError
-		log "DNS: #{type_as_string} #{name} -> server fail, invalid IP in DB"
-		return build_dns_answer id, recursion_desired, RCODE_SERVER_FAILURE, domain, type
+	if name == "@" and (type == TYPE_NS or type == TYPE_ALL)
+		records << resource_record(TYPE_NS, $config["soa"]["ttl"], domain_name($config["soa"]["nameserver"]))
+		texts << "NS(#{$config["soa"]["nameserver"]})"
+	end
+	
+	# Look for records in the database. There might also be records for the server itself ("@") in there.
+	if $db[name]
+		begin
+			records << resource_record(TYPE_A,    $config["ttl"], IPAddr.new($db[name]["A"]).hton)    and texts << $db[name]["A"]    if (type == TYPE_A    or type == TYPE_ALL) and $db[name]["A"]
+			records << resource_record(TYPE_AAAA, $config["ttl"], IPAddr.new($db[name]["AAAA"]).hton) and texts << $db[name]["AAAA"] if (type == TYPE_AAAA or type == TYPE_ALL) and $db[name]["AAAA"]
+		rescue ArgumentError
+			log "DNS: #{type_as_string} #{name} -> server fail, invalid IP in DB"
+			return build_dns_answer id, recursion_desired, RCODE_SERVER_FAILURE, domain, type
+		end
 	end
 	
 	if records.empty?
-		log "DNS: #{type_as_string} #{name} -> no records returned"
-		return build_dns_answer id, recursion_desired, RCODE_NO_ERROR, domain, type
+		if $db[name]
+			# No records found but we know the subdomain. Return an empty answer to indicate that there might be other records.
+			log "DNS: #{type_as_string} #{name} -> no records returned"
+			return build_dns_answer id, recursion_desired, RCODE_NO_ERROR, domain, type
+		else
+			# Unknown subdomain, return an error for an unkown domain.
+			log "DNS: #{type_as_string} #{name} -> not found"
+			return build_dns_answer id, recursion_desired, RCODE_NAME_ERROR, domain, type
+		end
 	else
 		log "DNS: #{type_as_string} #{name} -> #{texts.join(", ")}"
 		return build_dns_answer id, recursion_desired, RCODE_NO_ERROR, domain, type, *records
