@@ -55,4 +55,4 @@ soa:
   expire_time: 3600000
   # Time not found responses (NXDOMAIN) can be cached. This is the maximum
   # time a newly added domain might need to be available world wide.
-  negative_caching_ttl: 172800
+  negative_caching_ttl: 86400
