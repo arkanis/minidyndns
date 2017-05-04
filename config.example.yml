@@ -1,6 +1,7 @@
 # The domain hosted by this DNS server. It will only reply to requests
 # regarding subdomains of this domain. Everything is ignored completely.
 domain: dyn.example.com
+
 # Time to live (TTL) of replies send by the DNS server. This is the time
 # in seconds an reply stays valid. The higher the value the longer clients
 # might take to figure out that an IP address has changed. Small values
