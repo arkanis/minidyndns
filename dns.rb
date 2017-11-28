@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.1.3
+MiniDynDNS v1.1.5
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
