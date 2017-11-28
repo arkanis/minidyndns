@@ -30,18 +30,24 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
 1.0.2 2015-11-19  Trying to update records without a password now returns 403
                   forbidden. They're unchangable.
                   Errors during HTTP or DNS requests are now logged to stderr.
-1.0.3 2015-11-25  An empty answer is now returned if we can't find the requested record but the name has other records
-                  (RFC 4074 4.2. Return "Name Error").
+1.0.3 2015-11-25  An empty answer is now returned if we can't find the requested
+                  record but the name has other records (RFC 4074 4.2. Return
+                  "Name Error").
 1.1.0 2017-01-06  Added HTTPS support.
                   Fixed hanging HTTP connections of stupid routers breaking DNS
                   the server (moved HTTP servers into extra thread and imposed
                   timeout).
-1.1.1 2017-02-12  The server can now resolve itself by using the name "@" (reported by Chris).
+1.1.1 2017-02-12  The server can now resolve itself by using the name "@"
+                  (reported by Chris).
 1.1.2 2017-03-31  Names are now matched case insensitive (reported by SebiTNT).
-                  HTTP server can now be disabled via configuration (requested by SebiTNT).
-1.1.3 2017-04-01  Unknown DNS record types are now printed with their numerical value instead of an empty string
-                  (reported by SebiTNT).
-1.1.4 2017-04-02  Server now answers NS queries about itself (reported by SebiTNT).
+                  HTTP server can now be disabled via configuration (requested
+                  by SebiTNT).
+1.1.3 2017-04-01  Unknown DNS record types are now printed with their numerical
+                  value instead of an empty string (reported by SebiTNT).
+1.1.4 2017-04-02  Server now answers NS queries about itself (reported by
+                  SebiTNT).
+1.1.5 2017-11-28  Log messages and errors are now written immediatly (flushed)
+                  even when the output is redirected (reported by Catscrash).
 
 =end
 
@@ -63,12 +69,14 @@ require "timeout"
 # Returns true so it can be used with the "and" operator like this:
 #   log("...") and return if something.broke?
 def log(message)
-	puts Time.now.strftime("%Y-%m-%d %H:%M:%S") + " " + message
+	$stdout.puts Time.now.strftime("%Y-%m-%d %H:%M:%S") + " " + message
+	$stdout.flush
 	return true
 end
 
 def error(message)
 	$stderr.puts Time.now.strftime("%Y-%m-%d %H:%M:%S") + " " + message
+	$stderr.flush
 	return true
 end
 
@@ -304,6 +312,7 @@ rescue StandardError => e
 	e.backtrace.each do |stackframe|
 		$stderr.puts "\t#{stackframe}"
 	end
+	$stderr.flush
 end
 
 def build_dns_answer(id, recursion_desired, response_code, domain, question_type, *answers)
@@ -555,6 +564,7 @@ rescue StandardError => e
 	e.backtrace.each do |stackframe|
 		$stderr.puts "\t#{stackframe}"
 	end
+	$stderr.flush
 end
 
 
