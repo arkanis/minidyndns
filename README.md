@@ -46,6 +46,8 @@ The HTTP request `GET /?myip=[ip]` where `[ip]` is either an IPv4 or IPv6 addres
 
 If `[ip]` is an empty string (`GET /?myip=`) both the IPv4 and IPv6 address are invalidated. The server won't return an IP for that subdomain until a new IP is assigned.
 
+You can omit the `myip` parameter (just `GET /`). In that case the server will set the subdomain matching the authentication to whatever IP the client is using to connect to the HTTP interface. In the internet this is your public IP. If you use MiniDynDNS in a local network this will probably be a local IP address.
+
 You can use `wget` on the command line or in scripts to assign a new IP to a subdomain (see "Some useful commands"). Languages like PHP and Ruby can also do HTTP requests directly.
 
 
@@ -66,11 +68,13 @@ Update a name with a new IPv4 or IPv6 address:
 
 	wget --user foo --password bar -O /dev/null http://127.0.0.2/?myip=192.168.0.1
 	wget --user foo --password bar -O /dev/null http://127.0.0.2/?myip=ff80::1
+	wget --user foo --password bar -O /dev/null http://127.0.0.2/  # set the subdomain to the clients IP
 
 Same with `curl` and over HTTPS:
 
 	curl -u foo:bar --cacert server_cert.pem https://127.0.0.2/?myip=192.168.0.2
 	curl -u foo:bar --cacert server_cert.pem https://127.0.0.2/?myip=ff80::1
+	curl -u foo:bar --cacert server_cert.pem https://127.0.0.2/  # set the subdomain to the clients IP
 
 Note: Don't use the self-signed certificate of your CA with `--cacert`. For some reason this causes OpenSSL to freak out and block the entire HTTP/HTTPS interface. Please let me know if you know why.
 

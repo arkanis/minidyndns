@@ -49,6 +49,11 @@ def https_update_ip(ip, user, password)
 rescue OpenURI::HTTPError, EOFError
 end
 
+def http_update_without_ip(user, password)
+	open "http://127.0.54.17:10080/", http_basic_authentication: [user, password]
+rescue OpenURI::HTTPError, EOFError
+end
+
 
 #
 # Startup DNS server with our test configuration, shut it down when done and clean up changed config.
@@ -122,6 +127,26 @@ test "Updated serial of SOA record",
 	"SOA", "dyn.example.com",
 	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110211 86400 7200 3600000 172800"
 
+# Change a record to the IP of the client connection
+test "change record to connection IP (before)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
+http_update_without_ip "bar", "pw2"
+test "change record to connection IP (after)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	127.0.0.1"
+test "change record to connection IP (updated serial of SOA record)",
+	"SOA", "dyn.example.com",
+	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110212 86400 7200 3600000 172800"
+http_update_ip "192.168.0.22", "bar", "pw2"
+test "change record to connection IP (after changing back)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
+test "change record to connection IP (updated serial of SOA record)",
+	"SOA", "dyn.example.com",
+	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110213 86400 7200 3600000 172800"
+
+
 http_update_ip "ff80::2", "bar", "wrong-pw"
 test "record after wrong HTTP password",
 	"AAAA", "bar.dyn.example.com",
@@ -133,7 +158,7 @@ test "record after wrong HTTP user",
 	"bar.dyn.example.com.	15	IN	AAAA	ff80::2"
 test "Unchanged serial",
 	"SOA", "dyn.example.com",
-	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110211 86400 7200 3600000 172800"
+	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110213 86400 7200 3600000 172800"
 
 test "A record before attempting impossible change",
 	"A", "unchangable.dyn.example.com",
@@ -196,8 +221,6 @@ test "random case name in lowercase",
 test "random case name in uppercase",
 	"A", "RANDOMECASE.dyn.example.com",
 	"randomecase.dyn.example.com. 15	IN	A	192.168.0.1"
-
-
 
 
 # Merging the DB from file

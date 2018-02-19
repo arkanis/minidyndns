@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.1.5
+MiniDynDNS v1.2.0
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -34,8 +34,8 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
                   record but the name has other records (RFC 4074 4.2. Return
                   "Name Error").
 1.1.0 2017-01-06  Added HTTPS support.
-                  Fixed hanging HTTP connections of stupid routers breaking DNS
-                  the server (moved HTTP servers into extra thread and imposed
+                  Fixed hanging HTTP connections of stupid routers breaking the
+                  DNS server (moved HTTP servers into extra thread and imposed
                   timeout).
 1.1.1 2017-02-12  The server can now resolve itself by using the name "@"
                   (reported by Chris).
@@ -48,6 +48,9 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
                   SebiTNT).
 1.1.5 2017-11-28  Log messages and errors are now written immediatly (flushed)
                   even when the output is redirected (reported by Catscrash).
+1.2.0 2018-02-19  When the "myip" parameter is omitted in the HTTP interface
+                  the records IP is set to the peer IP of the connection
+                  (contributed by Chris).
 
 =end
 
@@ -497,10 +500,14 @@ def handle_http_connection(connection)
 		throw :status, :unchangable if $db[user]["pass"].to_s.strip == ""
 		# Make sure we're authenticated
 		throw :status, :not_authorized unless password == $db[user]["pass"]
-		# Make sure we got the necessary params
-		throw :status, :bad_request unless params["myip"]
 		
-		ip_as_string = CGI::unescape params["myip"].first
+		if params.include? "myip"
+			ip_as_string = CGI::unescape params["myip"].first
+		else
+			# If no myip parameter was provided directly use the public IP of the client connection
+			ip_as_string = connection.peeraddr(:numeric).last
+		end
+		
 		if ip_as_string == ''
 			$db[user]["A"]    = nil
 			$db[user]["AAAA"] = nil
