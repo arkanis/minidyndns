@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.2.0
+MiniDynDNS v1.2.1
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -51,6 +51,8 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
 1.2.0 2018-02-19  When the "myip" parameter is omitted in the HTTP interface
                   the records IP is set to the peer IP of the connection
                   (contributed by Chris).
+1.2.1 2018-08-18  Fixed a server crash when receiving invalid packets that were
+                  just 1 or 2 bytes long (reported by acrolink).
 
 =end
 
@@ -246,6 +248,10 @@ end
 # lower case question name and type and if recursion is desired by
 # the client. If parsing fails nil is returned.
 def parse_dns_question(packet)
+	# Abort if the packet is shorter than the header (we know it's invalid then).
+	# This avoids a (harmless) exception thrown when processing the flags field.
+	return if packet.bytesize < 12
+	
 	# Taken from RFC 1035, 4.1.1. Header section format
 	# 
 	#                                 1  1  1  1  1  1
@@ -316,6 +322,7 @@ rescue StandardError => e
 		$stderr.puts "\t#{stackframe}"
 	end
 	$stderr.flush
+	return
 end
 
 def build_dns_answer(id, recursion_desired, response_code, domain, question_type, *answers)

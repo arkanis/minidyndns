@@ -251,3 +251,14 @@ test "changed record after using new password",
 test "reload random case names (name isn't updated, just not deleted)",
 	"A", "randomecase.dyn.example.com",
 	"randomecase.dyn.example.com. 15	IN	A	192.168.0.1"
+
+
+# Send invalid DNS packets to the server and see if it remains up and running
+UDPSocket.open{|s| s.send "??", 0, "127.0.54.17", 10053 }
+test "server answers after receiving an invalid DNS packet (just 2 byte so the flags field is missing)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
+UDPSocket.open{|s| s.send "something that is longer than the initial 2 byte id", 0, "127.0.54.17", 10053 }
+test "server answers after receiving an invalid DNS packet (longer than 2 bytes)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
