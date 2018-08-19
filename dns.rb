@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.2.1
+MiniDynDNS v1.3.0
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -53,6 +53,9 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
                   (contributed by Chris).
 1.2.1 2018-08-18  Fixed a server crash when receiving invalid packets that were
                   just 1 or 2 bytes long (reported by acrolink).
+1.3.0 2018-08-19  The database file is no longer saved after each HTTP request
+                  but only when a client actually reports a changed IP address
+                  (contributed by acrolink).
 
 =end
 
@@ -524,13 +527,19 @@ def handle_http_connection(connection)
 			rescue ArgumentError
 				throw :status, :bad_request
 			end
-			if ip.ipv4?
-				$db[user]["A"] = ip_as_string
+			
+			record_type_to_update = if ip.ipv4?
+				"A"
 			elsif ip.ipv6?
-				$db[user]["AAAA"] = ip_as_string
+				"AAAA"
 			else
 				throw :status, :bad_request
 			end
+			
+			# Skip the DB update if the IP address hasn't changed (no point in writing the same data)
+			throw :status, :same_as_before if $db[user][record_type_to_update] == ip_as_string
+			
+			$db[user][record_type_to_update] = ip_as_string
 		end
 		
 		$db["SERIAL"] += 1
@@ -541,6 +550,14 @@ def handle_http_connection(connection)
 	case status
 	when :ok
 		log "#{log_prefix}: #{method} #{path_and_querystring} -> updated #{user} to #{ip_as_string}"
+		connection.write [
+			"HTTP/1.0 200 OK",
+			"Content-Type: text/plain",
+			"",
+			"Your IP has been updated"
+		].join("\r\n")
+	when :same_as_before
+		log "#{log_prefix}: #{method} #{path_and_querystring} -> skipped, #{user} reported same IP as before"
 		connection.write [
 			"HTTP/1.0 200 OK",
 			"Content-Type: text/plain",

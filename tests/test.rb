@@ -262,3 +262,13 @@ UDPSocket.open{|s| s.send "something that is longer than the initial 2 byte id",
 test "server answers after receiving an invalid DNS packet (longer than 2 bytes)",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
+
+
+test "Serial before updating IP with the same value",
+	"SOA", "dyn.example.com",
+	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110218 86400 7200 3600000 172800"
+http_update_ip "192.168.0.22", "bar", "changed-pw"
+http_update_ip "ff80::3", "bar", "changed-pw"
+test "Unchanged serial after updating IP with the same value",
+	"SOA", "dyn.example.com",
+	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110218 86400 7200 3600000 172800"
