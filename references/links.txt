@@ -1,0 +1,39 @@
+HTTP interface for DynDNS server
+	http://www.noip.com/integrate/request
+
+Application Aspects of IPv6 Transition
+	https://www.ietf.org/rfc/rfc4038.txt
+
+Common Misbehavior Against DNS Queries for IPv6 Addresses
+	https://www.ietf.org/rfc/rfc4074.txt
+
+Extension Mechanisms for DNS (EDNS(0))
+	https://tools.ietf.org/html/rfc6891
+
+Operational Considerations and Issues with IPv6 DNS
+	https://www.ietf.org/rfc/rfc4472.txt
+
+DOMAIN NAMES - IMPLEMENTATION AND SPECIFICATION
+	https://tools.ietf.org/html/rfc1035
+
+The Structure of a DNS SOA Record
+	https://support.microsoft.com/en-us/help/163971/the-structure-of-a-dns-soa-record
+
+Common DNS Operational and Configuration Errors
+	https://tools.ietf.org/html/rfc1912
+
+Dynamic DNS at freedns.afraid.org using a Fritz!Box
+	https://superuser.com/questions/662452/dynamic-dns-at-freedns-afraid-org-using-a-fritzbox
+
+Dynamic DNS for both IPv4 and IPv6 (using freedns.afraid.org or others)
+	https://superuser.com/questions/719425/dynamic-dns-for-both-ipv4-and-ipv6-using-freedns-afraid-org-or-others
+
+
+HOWTO - Delegate a Sub-domain (a.k.a. subzone)
+	http://www.zytrax.com/books/dns/ch9/delegate.html
+
+What is DNS Delegation?
+	https://serverfault.com/questions/530415/what-is-dns-delegation
+
+Delegating zones
+	https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2003/cc784494%28v=ws.10%29
