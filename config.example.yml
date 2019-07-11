@@ -13,6 +13,8 @@ ttl: 15
 dns:
   port: 53
   ip: 0.0.0.0
+  # Set to true to log hex dumps of every incomming DNS packet (for debugging).
+  #dump_packets: true
 # IP and port the HTTP server runs on
 http:
   port: 80

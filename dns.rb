@@ -56,6 +56,7 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
 1.3.0 2018-08-19  The database file is no longer saved after each HTTP request
                   but only when a client actually reports a changed IP address
                   (contributed by acrolink).
+x.x.x 2019-04-11  Added a hexdump of DNS packets to track down incompatibilities.
 
 =end
 
@@ -251,6 +252,14 @@ end
 # lower case question name and type and if recursion is desired by
 # the client. If parsing fails nil is returned.
 def parse_dns_question(packet)
+	if $config["dns"] and $config["dns"]["dump_packets"]
+		packet.bytes.each_slice(16) do |slice|
+			hex = slice.collect{ |byte| format("%02x", byte) }.join(" ")
+			ascii = slice.collect{ |byte| if byte.ord >= 32 and byte.ord <= 126 then byte.chr else "." end }.join
+			puts hex.ljust(16*3+1) + ascii
+		end
+	end
+	
 	# Abort if the packet is shorter than the header (we know it's invalid then).
 	# This avoids a (harmless) exception thrown when processing the flags field.
 	return if packet.bytesize < 12
