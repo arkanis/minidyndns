@@ -12,6 +12,7 @@ ruby version of your system. You can change that in the code if you want.
 
 require "fileutils"
 require "open-uri"
+require "openssl"
 
 
 #
@@ -51,6 +52,11 @@ end
 
 def http_update_without_ip(user, password)
 	open "http://127.0.54.17:10080/", http_basic_authentication: [user, password]
+rescue OpenURI::HTTPError, EOFError
+end
+
+def https_update_without_ip(user, password)
+	open "https://127.0.54.17:10443/", http_basic_authentication: [user, password], ssl_verify_mode: OpenSSL::SSL::VERIFY_NONE
 rescue OpenURI::HTTPError, EOFError
 end
 
@@ -146,6 +152,25 @@ test "change record to connection IP (updated serial of SOA record)",
 	"SOA", "dyn.example.com",
 	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110213 86400 7200 3600000 172800"
 
+# Change a record to the IP of the client connection via HTTPS
+test "change record to connection IP via HTTPS (before)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
+https_update_without_ip "bar", "pw2"
+test "change record to connection IP via HTTPS (after)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	127.0.0.1"
+test "change record to connection IP via HTTPS (updated serial of SOA record)",
+	"SOA", "dyn.example.com",
+	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110214 86400 7200 3600000 172800"
+http_update_ip "192.168.0.22", "bar", "pw2"
+test "change record to connection IP via HTTPS (after changing back)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
+test "change record to connection IP via HTTPS (updated serial of SOA record)",
+	"SOA", "dyn.example.com",
+	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110215 86400 7200 3600000 172800"
+
 
 http_update_ip "ff80::2", "bar", "wrong-pw"
 test "record after wrong HTTP password",
@@ -158,7 +183,7 @@ test "record after wrong HTTP user",
 	"bar.dyn.example.com.	15	IN	AAAA	ff80::2"
 test "Unchanged serial",
 	"SOA", "dyn.example.com",
-	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110213 86400 7200 3600000 172800"
+	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110215 86400 7200 3600000 172800"
 
 test "A record before attempting impossible change",
 	"A", "unchangable.dyn.example.com",
@@ -266,9 +291,9 @@ test "server answers after receiving an invalid DNS packet (longer than 2 bytes)
 
 test "Serial before updating IP with the same value",
 	"SOA", "dyn.example.com",
-	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110218 86400 7200 3600000 172800"
+	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110220 86400 7200 3600000 172800"
 http_update_ip "192.168.0.22", "bar", "changed-pw"
 http_update_ip "ff80::3", "bar", "changed-pw"
 test "Unchanged serial after updating IP with the same value",
 	"SOA", "dyn.example.com",
-	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110218 86400 7200 3600000 172800"
+	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110220 86400 7200 3600000 172800"

@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.3.0
+MiniDynDNS v1.3.1
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -56,7 +56,9 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
 1.3.0 2018-08-19  The database file is no longer saved after each HTTP request
                   but only when a client actually reports a changed IP address
                   (contributed by acrolink).
-x.x.x 2019-04-11  Added a hexdump of DNS packets to track down incompatibilities.
+1.3.1 2019-07-11  Added an DNS hexdump option to track down incompatibilities.
+                  Fixed a bug that prevented HTTPS updates using the
+                  connections IP (reported by Rick).
 
 =end
 
@@ -524,7 +526,7 @@ def handle_http_connection(connection)
 			ip_as_string = CGI::unescape params["myip"].first
 		else
 			# If no myip parameter was provided directly use the public IP of the client connection
-			ip_as_string = connection.peeraddr(:numeric).last
+			ip_as_string = connection.peeraddr.last
 		end
 		
 		if ip_as_string == ''
@@ -644,15 +646,20 @@ udp_socket = UDPSocket.new
 udp_socket.bind $config["dns"]["ip"], $config["dns"]["port"]
 
 # Open HTTP server if configured
+# Avoid lenghy name lookups when the connection IP is used as new IP by setting do_not_reverse_lookup to false.
+# peeraddr(:numeric) doesn't work for HTTPS servers, only for TCP servers (reported by Rick).
 http_server = if $config["http"]
-	TCPServer.new $config["http"]["ip"], $config["http"]["port"]
+	tcp_server = TCPServer.new $config["http"]["ip"], $config["http"]["port"]
+	tcp_server.do_not_reverse_lookup = true
+	tcp_server
 else
 	nil
 end
 
-# Open HTTPS server if configured
+# Open HTTPS server if configured (again with do_not_reverse_lookup = false because of OpenSSLs peeraddr)
 https_server = if $config["https"]
 	https_tcp_server = TCPServer.new $config["https"]["ip"], $config["https"]["port"]
+	https_tcp_server.do_not_reverse_lookup = true
 	ssl_context = OpenSSL::SSL::SSLContext.new
 	ssl_context.cert = OpenSSL::X509::Certificate.new File.open($config["https"]["cert"])
 	ssl_context.key = OpenSSL::PKey::RSA.new File.open($config["https"]["priv_key"])
