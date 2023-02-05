@@ -474,12 +474,13 @@ end
 # Everything else is ignored right now (path, other parameters or headers).
 def handle_http_connection(connection)
 	log_prefix = if connection.is_a? OpenSSL::SSL::SSLSocket then "HTTPS" else "HTTP" end
-	
+
+	method, path_and_querystring, params, user, password, ip_as_string = nil, nil, nil, nil, nil, nil
+
 	# Read the entire request from the connection and fill the local variables.
 	# This must not take longer that the configured number of seconds or we'll kill the connection.
 	# The idea is to handle all connections in a single thread (to avoid DOS attacks) but prevent
 	# stupids router from keeping connections open for ever.
-	method, path_and_querystring, params, user, password = nil, nil, nil, nil, nil
 	begin
 		# I know timeout() is considered harmful but we rely on the global interpreter lock anyway to
 		# synchronize access to $db. So the server only works correctly with interpreters that have a
@@ -505,6 +506,10 @@ def handle_http_connection(connection)
 						user, password = Base64.decode64(rest).split(":", 2)
 					end
 				end
+
+				if $config["trust_proxy"] and name.downcase == "x-forwarded-for"
+					ip_as_string = value.split(",").last
+				end
 			end
 		end
 	rescue Timeout::Error
@@ -513,7 +518,6 @@ def handle_http_connection(connection)
 	end
 	
 	# Process request
-	ip_as_string = nil
 	status = catch :status do
 		# Mare sure we got auth information
 		throw :status, :not_authorized unless user and $db[user]
@@ -524,7 +528,7 @@ def handle_http_connection(connection)
 		
 		if params.include? "myip"
 			ip_as_string = CGI::unescape params["myip"].first
-		else
+		elsif (ip_as_string.nil? || ip_as_string.empty?)
 			# If no myip parameter was provided directly use the public IP of the client connection
 			ip_as_string = connection.peeraddr.last
 		end

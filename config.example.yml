@@ -13,7 +13,7 @@ ttl: 15
 dns:
   port: 53
   ip: 0.0.0.0
-  # Set to true to log hex dumps of every incomming DNS packet (for debugging).
+  # Set to true to log hex dumps of every incoming DNS packet (for debugging).
   #dump_packets: true
 # IP and port the HTTP server runs on
 http:
@@ -27,6 +27,10 @@ https:
 # To disable HTTP and/or HTTPS just set the keys to false instead of the above
 #http: false
 #https: false
+
+# If minidyndns is behind a trusted proxy, and ?myip is not provided, then the the last ip in the
+# X-Forwarded-For header will be used
+trust_proxy: false
 
 # Maximum number of seconds the server waits for clients to send
 # the entire HTTP request (to kill requests from stupid routers that
