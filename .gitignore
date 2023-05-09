@@ -1,0 +1,9 @@
+dns.*.rb
+*.pem
+*.log
+config.yml
+db.yml
+
+tests/db.yml
+tests/*.pem
+tests/test.*.rb

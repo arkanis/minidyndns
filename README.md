@@ -96,3 +96,11 @@ Query IPv4 (A), IPv6 (AAAA) or both (ANY) records from DNS server running on 127
 Query the servers start of authority (SOA) record:
 
 	dig @127.0.0.2 dyn.example.com SOA
+
+
+# Running the test suite
+
+	cd tests
+	./gen_https_cert.sh
+	ruby test.rb
+	sudo ruby test.rb   # Tests dropping privileges

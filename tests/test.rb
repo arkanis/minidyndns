@@ -40,39 +40,29 @@ def test(description, type, name, *expected_lines)
 	end
 end
 
-def http_update_ip(ip, user, password)
-	open "http://127.0.54.17:10080/?myip=#{ip}", http_basic_authentication: [user, password]
-rescue OpenURI::HTTPError, EOFError
-end
-
-def https_update_ip(ip, user, password)
-	open "https://127.0.54.17:10443/?myip=#{ip}",  ssl_verify_mode: 0, http_basic_authentication: [user, password]
-rescue OpenURI::HTTPError, EOFError
-end
-
-def http_update_without_ip(user, password)
-	open "http://127.0.54.17:10080/", http_basic_authentication: [user, password]
-rescue OpenURI::HTTPError, EOFError
-end
-
-def https_update_without_ip(user, password)
-	open "https://127.0.54.17:10443/", http_basic_authentication: [user, password], ssl_verify_mode: OpenSSL::SSL::VERIFY_NONE
+def http_update(user, password, ip: nil, https: false, headers: {})
+	url = https ? "https://127.0.54.17:10443/" : "http://127.0.54.17:10080/"
+	url += "?myip=#{ip}" if ip
+	URI.open url, **headers, http_basic_authentication: [user, password], ssl_verify_mode: OpenSSL::SSL::VERIFY_NONE
 rescue OpenURI::HTTPError, EOFError
 end
 
 
 #
 # Startup DNS server with our test configuration, shut it down when done and clean up changed config.
+# Give the server some time to start up, otherwise our tests might run before the server actually listens.
 #
 
 FileUtils.cd File.dirname(__FILE__)
 FileUtils.copy_file "db.01.yml", "db.yml"
+FileUtils.chmod "o=rw", "db.yml"
 server = spawn "ruby ../dns.rb", out: "/dev/null"
 at_exit do
 	Process.kill "INT", server
 	Process.wait server
 	FileUtils.remove "db.yml"
 end
+sleep 0.5
 
 
 # Normal lookups
@@ -113,7 +103,7 @@ test "NS record for nameserver itself",
 test "A record before change",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.2"
-http_update_ip "192.168.0.22", "bar", "pw2"
+http_update "bar", "pw2", ip: "192.168.0.22"
 test "A record after change",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
@@ -125,7 +115,7 @@ test "AAAA record before adding it",
 	"AAAA", "bar.dyn.example.com",
 	"status: NOERROR",
 	"ANSWER: 0"
-http_update_ip "ff80::2", "bar", "pw2"
+http_update "bar", "pw2", ip: "ff80::2"
 test "AAAA record after adding it",
 	"AAAA", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	AAAA	ff80::2"
@@ -137,14 +127,14 @@ test "Updated serial of SOA record",
 test "change record to connection IP (before)",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
-http_update_without_ip "bar", "pw2"
+http_update "bar", "pw2"
 test "change record to connection IP (after)",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	127.0.0.1"
 test "change record to connection IP (updated serial of SOA record)",
 	"SOA", "dyn.example.com",
 	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110212 86400 7200 3600000 172800"
-http_update_ip "192.168.0.22", "bar", "pw2"
+http_update "bar", "pw2", ip: "192.168.0.22"
 test "change record to connection IP (after changing back)",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
@@ -156,14 +146,14 @@ test "change record to connection IP (updated serial of SOA record)",
 test "change record to connection IP via HTTPS (before)",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
-https_update_without_ip "bar", "pw2"
+http_update "bar", "pw2", https: true
 test "change record to connection IP via HTTPS (after)",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	127.0.0.1"
 test "change record to connection IP via HTTPS (updated serial of SOA record)",
 	"SOA", "dyn.example.com",
 	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110214 86400 7200 3600000 172800"
-http_update_ip "192.168.0.22", "bar", "pw2"
+http_update "bar", "pw2", ip: "192.168.0.22"
 test "change record to connection IP via HTTPS (after changing back)",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
@@ -172,12 +162,12 @@ test "change record to connection IP via HTTPS (updated serial of SOA record)",
 	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110215 86400 7200 3600000 172800"
 
 
-http_update_ip "ff80::2", "bar", "wrong-pw"
+http_update "bar", "wrong-pw", ip: "ff80::2"
 test "record after wrong HTTP password",
 	"AAAA", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	AAAA	ff80::2"
 
-http_update_ip "ff80::2", "wrong-user", "pw2"
+http_update "wrong-user", "pw2", ip: "ff80::2"
 test "record after wrong HTTP user",
 	"AAAA", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	AAAA	ff80::2"
@@ -188,11 +178,11 @@ test "Unchanged serial",
 test "A record before attempting impossible change",
 	"A", "unchangable.dyn.example.com",
 	"unchangable.dyn.example.com. 15	IN	A	192.168.0.3"
-http_update_ip "192.168.0.30", "unchangable", ""
+http_update "unchangable", "", ip: "192.168.0.30"
 test "A record after attempting impossible change",
 	"A", "unchangable.dyn.example.com",
 	"unchangable.dyn.example.com. 15	IN	A	192.168.0.3"
-http_update_ip "192.168.0.30", "unchangable", "wrong-pw"
+http_update "unchangable", "wrong-pw", ip: "192.168.0.30"
 test "A record after attempting impossible change",
 	"A", "unchangable.dyn.example.com",
 	"unchangable.dyn.example.com. 15	IN	A	192.168.0.3"
@@ -200,11 +190,11 @@ test "A record after attempting impossible change",
 test "A record before change via HTTPS",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
-https_update_ip "192.168.0.33", "bar", "pw2"
+http_update "bar", "pw2", ip: "192.168.0.33", https: true
 test "A record after change via HTTPS",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.33"
-https_update_ip "192.168.0.22", "bar", "pw2"
+http_update "bar", "pw2", ip: "192.168.0.22", https: true
 test "A record after changing back via HTTPS",
 	"A", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
@@ -218,7 +208,7 @@ test "resolve AAAA record of itself",
 	"dyn.example.com.	15	IN	AAAA	ff80::4"
 
 # Change the IP of the server itself
-http_update_ip "192.168.0.40", "@", "pw3"
+http_update "@", "pw3", ip: "192.168.0.40"
 test "resolve A record of itself after change via HTTP",
 	"A", "dyn.example.com",
 	"dyn.example.com.	15	IN	A	192.168.0.40"
@@ -251,6 +241,7 @@ test "random case name in uppercase",
 # Merging the DB from file
 FileUtils.remove "db.yml"
 FileUtils.copy_file "db.02.yml", "db.yml"
+FileUtils.chmod "o=rw", "db.yml"
 Process.kill "USR1", server
 
 test "deleted name",
@@ -263,12 +254,12 @@ test "ignoring not-existing IPs in DB file",
 	"AAAA", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	AAAA	ff80::2"
 
-http_update_ip "ff80::3", "bar", "pw2"
+http_update "bar", "pw2", ip: "ff80::3"
 test "unchanged record after using old password",
 	"AAAA", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	AAAA	ff80::2"
 
-http_update_ip "ff80::3", "bar", "changed-pw"
+http_update "bar", "changed-pw", ip: "ff80::3"
 test "changed record after using new password",
 	"AAAA", "bar.dyn.example.com",
 	"bar.dyn.example.com.	15	IN	AAAA	ff80::3"
@@ -292,8 +283,43 @@ test "server answers after receiving an invalid DNS packet (longer than 2 bytes)
 test "Serial before updating IP with the same value",
 	"SOA", "dyn.example.com",
 	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110220 86400 7200 3600000 172800"
-http_update_ip "192.168.0.22", "bar", "changed-pw"
-http_update_ip "ff80::3", "bar", "changed-pw"
+http_update "bar", "changed-pw", ip: "192.168.0.22"
+http_update "bar", "changed-pw", ip: "ff80::3"
 test "Unchanged serial after updating IP with the same value",
 	"SOA", "dyn.example.com",
 	"dyn.example.com.	86400	IN	SOA	ns.example.com. dns\\\\.admin.example.com. 2015110220 86400 7200 3600000 172800"
+
+
+# Change a record to the IP in the X-Forwarded-For header
+test "change record to X-Forwarded-For IP (before)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.22"
+http_update "bar", "changed-pw", headers: { "X-Forwarded-For" => "192.168.0.23" }
+test "change record to X-Forwarded-For IP (after)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.23"
+http_update "bar", "changed-pw", headers: { "X-Forwarded-For" => "192.168.0.24, 1.2.3.4" }
+	test "change record to X-Forwarded-For IP (after)",
+		"A", "bar.dyn.example.com",
+		"bar.dyn.example.com.	15	IN	A	192.168.0.24"
+
+# Change a record to the IP in the Forwarded header
+# Example from https://www.nginx.com/resources/wiki/start/topics/examples/forwarded/
+http_update "bar", "changed-pw", headers: { "Forwarded" => "for=12.34.56.78;host=example.com;proto=https, for=23.45.67.89" }
+test "change record to Forwarded IP (example 1)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	12.34.56.78"
+# Example from https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Forwarded
+http_update "bar", "changed-pw", headers: { "Forwarded" => 'Forwarded: For="[2001:db8:cafe::17]:4711"' }
+test "change record to Forwarded IP (example 2)",
+	"AAAA", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	AAAA	2001:db8:cafe::17"
+# Example from https://www.holisticseo.digital/technical-seo/web-accessibility/http-header/forwarded
+http_update "bar", "changed-pw", headers: { "Forwarded" => 'Forwarded : by=203.0.111.42;for="192.0.3.61";proto=https; ' }
+test "change record to Forwarded IP (example 3)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.0.3.61"
+http_update "bar", "changed-pw", ip: "192.168.0.22"
+test "change record to Forwarded IP (after changing back)",
+	"A", "bar.dyn.example.com",
+	"bar.dyn.example.com.	15	IN	A	192.168.0.22"

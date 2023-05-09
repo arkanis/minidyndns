@@ -11,7 +11,7 @@ https:
   port: 10443
   ip: 127.0.54.17
   cert: server_cert.pem
-  priv_key: server_priv_key.key
+  priv_key: server_priv_key.pem
 http_timeout: 5.0
 
 user: nobody

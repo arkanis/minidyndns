@@ -1,6 +1,6 @@
 =begin
 
-MiniDynDNS v1.3.1
+MiniDynDNS v1.4.0
 by Stephan Soller <stephan.soller@helionweb.de>
 
 # About the source code
@@ -20,8 +20,8 @@ global variables.
 
 # Running tests
 
-Execute tests/test.rb to put the DNS server through the paces. Run it as root
-(e.g. via sudo) to test privilege dropping.
+Execute tests/gen_https_cert.sh and then tests/test.rb to put the DNS server
+through the paces. Run it as root (e.g. via sudo) to test privilege dropping.
 
 # Version history
 
@@ -59,6 +59,13 @@ Execute tests/test.rb to put the DNS server through the paces. Run it as root
 1.3.1 2019-07-11  Added an DNS hexdump option to track down incompatibilities.
                   Fixed a bug that prevented HTTPS updates using the
                   connections IP (reported by Rick).
+      2020-07-09  Updating the IP via an HTTP request now also works if the
+                  request was made through HTTP proxies. Added support for the
+                  X-Forwarded-For and Forwarded HTTP headers for this (requested
+                  by Mentor).
+				  Never released, only send to Mentor for feedback.
+1.4.0 2023-05-09  Fixed corner cases of X-Forwarded-For and Forwarded headers.
+                  Updated the test suit to Ruby 3.
 
 =end
 
@@ -478,8 +485,8 @@ def handle_http_connection(connection)
 	# Read the entire request from the connection and fill the local variables.
 	# This must not take longer that the configured number of seconds or we'll kill the connection.
 	# The idea is to handle all connections in a single thread (to avoid DOS attacks) but prevent
-	# stupids router from keeping connections open for ever.
-	method, path_and_querystring, params, user, password = nil, nil, nil, nil, nil
+	# stupid routers from keeping connections open for ever.
+	method, path_and_querystring, params, user, password, proxy_client_ip = nil, nil, nil, nil, nil, nil
 	begin
 		# I know timeout() is considered harmful but we rely on the global interpreter lock anyway to
 		# synchronize access to $db. So the server only works correctly with interpreters that have a
@@ -495,15 +502,27 @@ def handle_http_connection(connection)
 			path, query_string = path_and_querystring.split("?", 2)
 			params = query_string ? CGI::parse(query_string) : {}
 			
-			# Extract user and password from HTTP headers
-			user, password = nil, nil
+			# Extract user and password from HTTP headers. If we got the HTTP request via proxy server
+			# extract the client ip from the X-Forwarded-For or Forwarded header.
 			until (line = connection.gets("\n").chomp) == ""
 				name, value = line.split(": ", 2)
-				if name.downcase == "authorization"
+				case name.downcase
+				when "authorization"
+					# Extract user and password from HTTP headers
 					auth_method, rest = value.split(" ", 2)
 					if auth_method.downcase == "basic"
 						user, password = Base64.decode64(rest).split(":", 2)
 					end
+				when "x-forwarded-for"
+					# e.g. X-Forwarded-For: 192.0.2.43, "[2001:db8:cafe::17]:1234"
+					# See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Forwarded-For
+					proxy_client_ip = value.split(",").first.strip.gsub(/^"|"$/, "")
+					proxy_client_ip = $1 if proxy_client_ip =~ /^\[(.+)\](\:\d+)?$/
+				when "forwarded"
+					# e.g. Forwarded: for=192.0.2.60;proto=http;by=203.0.113.43, for="[2001:db8:cafe::17]"
+					# See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Forwarded
+					proxy_client_ip = value.split(",").first.strip.match(/for=(.*?)(?:;|\s|$)/i)[1].gsub(/^"|"$/, "")
+					proxy_client_ip = $1 if proxy_client_ip =~ /^\[(.+)\](\:\d+)?$/
 				end
 			end
 		end
@@ -524,8 +543,11 @@ def handle_http_connection(connection)
 		
 		if params.include? "myip"
 			ip_as_string = CGI::unescape params["myip"].first
+		elsif proxy_client_ip
+			# If no myip parameter was provided but we got the client IP from an HTTP proxy use it
+			ip_as_string = proxy_client_ip
 		else
-			# If no myip parameter was provided directly use the public IP of the client connection
+			# If all else fails directly use the public IP of the client connection
 			ip_as_string = connection.peeraddr.last
 		end
 		
